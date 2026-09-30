@@ -13,7 +13,9 @@ internal class ServerlessEndpointsMustBeInlinePolicy : IEndpointPolicy
     public void Apply(Endpoint endpoint, IWolverineRuntime runtime)
     {
         // The durable inline outbox sends inline too -- awaited by the caller, no background agent -- so it
-        // already meets what Serverless needs; forcing it to Inline would only throw its outbox away.
+        // already meets what Serverless needs; forcing it to Inline would only throw its outbox away. If the same
+        // endpoint also listens, it stays Durable for that too, which is harmless only because Serverless never
+        // auto-starts a listener (Endpoint.ShouldAutoStartAsListener).
         if (endpoint.SendsDurablyInline) return;
 
         try

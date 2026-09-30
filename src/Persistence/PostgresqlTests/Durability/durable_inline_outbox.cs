@@ -40,10 +40,11 @@ public class durable_inline_outbox : IAsyncLifetime
         await _host.RebuildAllEnvelopeStorageAsync();
     }
 
-    private async Task<IHost> startHostAsync(Action<WolverineOptions>? configure = null)
+    private async Task<IHost> startHostAsync(Action<WolverineOptions>? configure = null, bool flagged = true,
+        InlineRecordingTransport? transport = null)
     {
-        var transport = new InlineRecordingTransport();
-        _transport ??= transport;
+        _transport ??= new InlineRecordingTransport();
+        transport ??= _transport;
 
         return await Host.CreateDefaultBuilder()
             .UseWolverine(opts =>
@@ -51,8 +52,10 @@ public class durable_inline_outbox : IAsyncLifetime
                 opts.Durability.Mode = DurabilityMode.Serverless;
                 opts.Durability.OutboxStaleTime = 1.Hours();
                 opts.PersistMessagesWithPostgresql(Servers.PostgresConnectionString, SchemaName);
-                opts.Transports.Add(_transport);
-                opts.PublishMessage<InlineOutboxPing>().To(InlineRecordingTransport.Uri).UseDurableInlineOutbox();
+                opts.Transports.Add(transport);
+                var route = opts.PublishMessage<InlineOutboxPing>().To(InlineRecordingTransport.Uri);
+                if (flagged) route.UseDurableInlineOutbox();
+                else route.SendInline();
                 configure?.Invoke(opts);
             }).StartAsync(Ct);
     }
@@ -209,6 +212,30 @@ public class durable_inline_outbox : IAsyncLifetime
         await _host.MessageBus().PublishAsync(new InlineOutboxPing("no transaction, healthy"));
         _transport.Sender.Sent.Count.ShouldBe(1);
         (await outboxCountAsync()).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task a_host_whose_endpoint_is_not_durable_skips_recovery_instead_of_resending_forever()
+    {
+        _transport.Sender.Fail = true;
+        await publishInTransactionAsync(new InlineOutboxPing("released"));
+        _transport.Sender.Fail = false;
+
+        // Serverless coerces an unflagged endpoint to Inline: an agent that would send but never delete the row.
+        // Its own transport instance, so the flag on this host's endpoint object cannot leak into it.
+        var unflaggedTransport = new InlineRecordingTransport();
+        using var unflagged = await startHostAsync(flagged: false, transport: unflaggedTransport);
+        await unflagged.GetRuntime().RecoverOutboxAsync(Ct);
+
+        unflaggedTransport.Sender.Sent.ShouldBeEmpty();
+        _transport.Sender.Sent.ShouldBeEmpty();
+        (await outboxCountAsync(TransportConstants.AnyNode)).ShouldBe(1);
+
+        await Runtime.RecoverOutboxAsync(Ct);
+        _transport.Sender.Sent.Count.ShouldBe(1);
+        (await outboxCountAsync()).ShouldBe(0);
+
+        await unflagged.StopAsync(Ct);
     }
 
     [Fact]

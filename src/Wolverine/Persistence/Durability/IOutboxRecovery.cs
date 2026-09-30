@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Wolverine.Persistence.Durability;
 using Wolverine.Runtime;
 using Wolverine.Tracking;
@@ -33,7 +34,18 @@ namespace Wolverine
         public static async Task RecoverOutboxAsync(this IWolverineRuntime runtime,
             CancellationToken cancellation = default)
         {
-            foreach (var store in (await runtime.Stores.FindAllAsync()).OfType<IOutboxRecovery>())
+            var stores = await runtime.Stores.FindAllAsync();
+            var recoverable = stores.OfType<IOutboxRecovery>().ToList();
+
+            // Silence would look like an empty outbox. Say which stores this cannot reach.
+            foreach (var store in stores.Where(x => x is not IOutboxRecovery && x is not NullMessageStore))
+            {
+                runtime.Logger.LogWarning(
+                    "Message store {Store} does not support on-demand outbox recovery, so its outbox was not recovered",
+                    store.Uri);
+            }
+
+            foreach (var store in recoverable)
             {
                 cancellation.ThrowIfCancellationRequested();
                 await store.RecoverOutboxAsync(runtime, cancellation);

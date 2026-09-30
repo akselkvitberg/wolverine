@@ -59,13 +59,28 @@ public abstract partial class MessageDatabase<T> : IOutboxRecovery
         }
     }
 
-    private static async Task executeAsync(AgentCommands commands, IWolverineRuntime runtime,
+    private async Task executeAsync(AgentCommands commands, IWolverineRuntime runtime,
         CancellationToken cancellation)
     {
         foreach (var command in commands)
         {
+            // Cancellation is honoured between destinations only. A destination's command claims its rows for
+            // this node before it sends them, so stopping inside it would strand the claimed rows until they go
+            // stale; once started, it runs to the end.
             cancellation.ThrowIfCancellationRequested();
-            var next = await command.ExecuteAsync(runtime, cancellation);
+
+            // A non-durable agent (e.g. an endpoint that Serverless coerced to Inline because this host did not
+            // set UseDurableInlineOutbox()) sends without ever deleting the outbox row, so the row would be
+            // bumped and re-sent on every pass, forever.
+            if (command is RecoverOutgoingMessagesCommand { SendingAgent.IsDurable: false } recover)
+            {
+                Logger.LogWarning(
+                    "Skipping outbox recovery for {Destination}: this host sends to it through a non-durable {Agent}, which would never remove the recovered rows. Configure the endpoint with UseDurableInlineOutbox() or UseDurableOutbox() on the recovering host",
+                    recover.SendingAgent.Destination, recover.SendingAgent.GetType().Name);
+                continue;
+            }
+
+            var next = await command.ExecuteAsync(runtime, CancellationToken.None);
             await executeAsync(next, runtime, cancellation);
         }
     }

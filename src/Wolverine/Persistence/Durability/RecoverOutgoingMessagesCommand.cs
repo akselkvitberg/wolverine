@@ -11,6 +11,8 @@ public class RecoverOutgoingMessagesCommand : IAgentCommand
     private readonly ILogger _logger;
     private readonly ISendingAgent _sendingAgent;
 
+    internal ISendingAgent SendingAgent => _sendingAgent;
+
     public RecoverOutgoingMessagesCommand(ISendingAgent sendingAgent, IMessageStore store, ILogger logger)
     {
         _sendingAgent = sendingAgent;
