@@ -16,8 +16,14 @@ public abstract class MessageRouterBase<T> : IMessageRouter
 
     protected MessageRouterBase(WolverineRuntime runtime)
     {
-        // We'll use this for executing scheduled envelopes that aren't native
-        LocalDurableQueue = runtime.Endpoints.GetOrBuildSendingAgent(TransportConstants.DurableLocalUri);
+        // We'll use this for executing scheduled envelopes that aren't native.
+        //
+        // Serverless mode removes the local transport, so building this agent threw UnknownTransportException and
+        // took every publish to an external endpoint down with it, although only a scheduled send without native
+        // scheduling ever uses it. There, it is a stand-in that fails that one case with a message saying why.
+        LocalDurableQueue = runtime.Options.Durability.Mode == DurabilityMode.Serverless
+            ? new ServerlessLocalDurableQueue()
+            : runtime.Endpoints.GetOrBuildSendingAgent(TransportConstants.DurableLocalUri);
 
         var chain = runtime.Handlers.ChainFor(typeof(T));
         if (chain != null)
