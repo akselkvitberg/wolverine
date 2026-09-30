@@ -11,7 +11,7 @@ namespace Wolverine.Runtime.Routing;
 /// </summary>
 internal class ServerlessLocalDurableQueue : ISendingAgent
 {
-    private const string Explanation =
+    internal const string Explanation =
         "This message is scheduled for later, but its transport cannot schedule it natively, and Serverless mode has " +
         "no durable local queue to hold it until then. Use a transport with native scheduled delivery for scheduled " +
         "messages, or a durability mode other than Serverless.";

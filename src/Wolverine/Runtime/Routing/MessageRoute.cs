@@ -204,6 +204,13 @@ public class MessageRoute : IMessageRoute, IMessageInvoker
             }
             else if (!sender.SupportsNativeScheduledSendFor(envelope, utcNow))
             {
+                // Refuse here, at the caller: once wrapped, a Serverless envelope is neither persisted nor
+                // schedulable, and a flush would only log it as discarded after the transaction committed.
+                if (localDurableQueue is ServerlessLocalDurableQueue)
+                {
+                    throw new NotSupportedException(ServerlessLocalDurableQueue.Explanation);
+                }
+
                 runtime.Logger.LogDebug("Envelope {EnvelopeId} ({MessageType}) wrapped for durable scheduled send to {Destination} (transport does not support native scheduling for this envelope)", envelope.Id, envelope.MessageType, envelope.Destination);
                 return envelope.ForScheduledSend(localDurableQueue);
             }

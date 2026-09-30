@@ -313,18 +313,13 @@ public partial class WolverineRuntime
             //     LocalRoutingMessageSource resolves Endpoint.Agent as a side
             //     effect of building a route), violating the mode's "no
             //     transports" contract.
-            //   - Serverless: RemoveLocal() above stripped the local transport,
-            //     but MessageRouterBase<T>'s ctor unconditionally calls
-            //     GetOrBuildSendingAgent(TransportConstants.DurableLocalUri)
-            //     for scheduled-envelope fallback, which now throws
-            //     UnknownTransportException. Skipping the pre-population avoids
-            //     materializing routers we don't need in this mode; per-type
-            //     RoutingFor() on the cold path still works because callers
-            //     either target external endpoints directly or never invoke
-            //     routing for local-only types.
+            //   - Serverless: RemoveLocal() above stripped the local transport.
+            //     MessageRouterBase<T> no longer builds the durable local queue in
+            //     this mode (it gets ServerlessLocalDurableQueue instead), so
+            //     routing to external endpoints works on the cold path.
             //
-            // TODO: a follow-up could make MessageRouterBase<T>'s LocalDurableQueue
-            // lazy / nullable so Serverless apps reclaim the AOT cold-start win.
+            // TODO: with that fixed, Serverless could pre-populate as well and
+            // reclaim the AOT cold-start win; left as it was to keep startup unchanged.
             var mode = Options.Durability.Mode;
             if (mode != DurabilityMode.MediatorOnly && mode != DurabilityMode.Serverless)
             {

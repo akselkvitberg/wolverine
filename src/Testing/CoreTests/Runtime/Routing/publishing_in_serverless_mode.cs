@@ -60,6 +60,29 @@ public class publishing_in_serverless_mode
         publishFailure.Message.ShouldContain("Serverless");
         transport.Sender.Sent.ShouldBeEmpty();
     }
+
+    [Fact]
+    public async Task a_scheduled_send_inside_a_message_context_is_refused_at_publish_not_dropped_at_flush()
+    {
+        // The handler / HTTP endpoint path: a MessageContext rather than the bare bus, so a failure at flush time
+        // would only be logged as discarded after the caller's transaction had committed.
+        var transport = new ServerlessRecordingTransport();
+        using var host = await Host.CreateDefaultBuilder()
+            .UseWolverine(opts =>
+            {
+                opts.Durability.Mode = DurabilityMode.Serverless;
+                opts.Transports.Add(transport);
+                opts.PublishMessage<ServerlessPing>().To(ServerlessRecordingTransport.Uri).SendInline();
+            }).StartAsync(TestContext.Current.CancellationToken);
+
+        var context = new MessageContext(host.GetRuntime());
+        var ex = await Should.ThrowAsync<NotSupportedException>(async () =>
+            await context.PublishAsync(new ServerlessPing("later"), new DeliveryOptions { ScheduleDelay = 1.Hours() }));
+        ex.Message.ShouldContain("Serverless");
+
+        await context.FlushOutgoingMessagesAsync();
+        transport.Sender.Sent.ShouldBeEmpty();
+    }
 }
 
 public record ServerlessPing(string Name);
