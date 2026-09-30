@@ -556,6 +556,13 @@ public class EndpointCollection : IEndpointCollection
                     ? new DelegatingMessageOutbox(_runtime.Storage.Outbox, _runtime.Stores)
                     : _runtime.Storage.Outbox;
 
+                if (endpoint.SendsDurablyInline)
+                {
+                    return new DurableInlineSendingAgent(sender, endpoint, outbox, _options.Durability,
+                        _runtime.LoggerFactory.CreateLogger<DurableInlineSendingAgent>(),
+                        _runtime.MessageTrackingFor(endpoint));
+                }
+
                 return new DurableSendingAgent(sender, _options.Durability,
                     _runtime.LoggerFactory.CreateLogger<DurableSendingAgent>(), _runtime.MessageTrackingFor(endpoint),
                     outbox, endpoint, _runtime, sendingPolicies);

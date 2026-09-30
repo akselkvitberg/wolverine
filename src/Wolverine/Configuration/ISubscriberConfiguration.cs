@@ -12,6 +12,16 @@ public interface ISubscriberConfiguration<T> : IEndpointConfiguration<T> where T
     T UseDurableOutbox();
 
     /// <summary>
+    ///     Like <see cref="UseDurableOutbox"/>, outgoing messages are persisted in the active transaction, but the
+    ///     send happens inline, awaited by the caller after the transaction commits, rather than in a background
+    ///     sending agent. A failed send is logged, leaves the message in the outbox for recovery and does not
+    ///     throw. Recover leftovers with <c>IWolverineRuntime.RecoverOutboxAsync()</c>. The transport must be able
+    ///     to send inline.
+    /// </summary>
+    /// <returns></returns>
+    T UseDurableInlineOutbox();
+
+    /// <summary>
     ///     By default, messages on this worker queue will not be persisted until
     ///     being successfully handled
     /// </summary>

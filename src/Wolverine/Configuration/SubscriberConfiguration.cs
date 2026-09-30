@@ -96,6 +96,16 @@ public class SubscriberConfiguration<T, TEndpoint> : DelayedEndpointConfiguratio
         return this.As<T>();
     }
 
+    public T UseDurableInlineOutbox()
+    {
+        add(e =>
+        {
+            e.RequestSubscriberMode(EndpointMode.Durable);
+            e.DurableInlineOutbox = true;
+        });
+        return this.As<T>();
+    }
+
     public T BufferedInMemory()
     {
         add(e => e.RequestSubscriberMode(EndpointMode.BufferedInMemory));

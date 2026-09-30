@@ -12,6 +12,10 @@ internal class ServerlessEndpointsMustBeInlinePolicy : IEndpointPolicy
 {
     public void Apply(Endpoint endpoint, IWolverineRuntime runtime)
     {
+        // The durable inline outbox sends inline too -- awaited by the caller, no background agent -- so it
+        // already meets what Serverless needs; forcing it to Inline would only throw its outbox away.
+        if (endpoint.SendsDurablyInline) return;
+
         try
         {
             // GH-3708. Coercing NativeAck to Inline is correct for Serverless -- there is no long-running process

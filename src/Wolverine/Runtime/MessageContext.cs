@@ -211,7 +211,14 @@ public class MessageContext : MessageBus, IMessageContext, IHasTenantId, IEnvelo
             try
             {
                 var utcNow = DateTimeOffset.UtcNow;
-                if (envelope.IsScheduledForLater(utcNow))
+                if (envelope.Sender is DurableInlineSendingAgent)
+                {
+                    // The durable inline outbox has no durability agent to release a scheduled row later, so every
+                    // envelope goes out now. A scheduled one only gets here when its transport schedules natively:
+                    // MessageRoute hands the rest to the durable local queue instead.
+                    await sendEnvelopeAsync(envelope).ConfigureAwait(false);
+                }
+                else if (envelope.IsScheduledForLater(utcNow))
                 {
                     if (!envelope.Sender!.IsDurable)
                     {

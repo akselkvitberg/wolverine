@@ -360,7 +360,28 @@ public abstract class Endpoint : ICircuitParameters, IDescribesProperties
     /// sends inline does not require finding all nine call sites again.
     /// </para>
     /// </summary>
-    public bool SendsInline => Mode is EndpointMode.Inline or EndpointMode.NativeAck;
+    public bool SendsInline => Mode is EndpointMode.Inline or EndpointMode.NativeAck || SendsDurablyInline;
+
+    /// <summary>
+    /// Opt in to the durable inline outbox for this sending endpoint. <see cref="Mode"/> stays
+    /// <see cref="EndpointMode.Durable"/>, so outgoing envelopes are still persisted in the same transaction as
+    /// the application's work, but after that transaction commits the send is awaited on the calling thread
+    /// instead of being handed to a background sending agent. A successful send deletes the outbox row; a failed
+    /// send releases it for recovery and does not throw. See <c>UseDurableInlineOutbox()</c> and
+    /// <c>IWolverineRuntime.RecoverOutboxAsync()</c>.
+    ///
+    /// <para>
+    /// Meant for hosts that must do no work outside of a request, e.g. request-billed Cloud Run or
+    /// <see cref="DurabilityMode.Serverless"/>. Nothing changes for an endpoint that does not set it.
+    /// </para>
+    /// </summary>
+    public bool DurableInlineOutbox { get; set; }
+
+    /// <summary>
+    /// <see cref="DurableInlineOutbox"/> only applies while the endpoint is still <see cref="EndpointMode.Durable"/>;
+    /// a later rule switching the endpoint to another mode wins, exactly as it would without the flag.
+    /// </summary>
+    internal bool SendsDurablyInline => DurableInlineOutbox && Mode == EndpointMode.Durable;
 
     /// <summary>
     /// GH-3712. Render <see cref="MaxDegreeOfParallelism"/> for diagnostics, saying "n/a" rather than
