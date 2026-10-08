@@ -79,3 +79,25 @@ endpoints:
 ```
 <sup><a href='https://github.com/JasperFx/wolverine/blob/main/src/Transports/RabbitMQ/Wolverine.RabbitMQ.Tests/Bugs/Bug_189_fails_if_there_are_many_messages_in_queue_on_startup.cs#L21-L33' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_usage_of_send_inline' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
+
+## Scheduled Retries
+
+Serverless mode starts no agents and does not run Wolverine's in-memory scheduled execution model, so with no
+message store there is nothing in the process that can hold a message until a `ScheduleRetry()`
+[error handling policy](/guide/handlers/error-handling) says to run it again. When a message hits a
+`ScheduleRetry()` (or `ScheduleRetryIndefinitely()`) policy on a listener without native scheduling, Wolverine
+defers the message back to the broker instead, so it is redelivered without the delay, and logs an error for that
+message. Wolverine also logs a warning at startup when these policies are configured in this mode.
+
+Because the delay is lost, prefer one of these in Serverless functions:
+
+* A transport whose listener schedules natively, such as [Azure Service Bus](/guide/messaging/transports/azureservicebus/scheduled) or Redis Streams
+* `RetryWithCooldown()` for short delays that can be spent inside the current invocation
+* A queue-level delivery delay where the broker has one, such as the SQS `DelaySeconds` queue attribute. In Serverless
+  every listener is Inline, and most Inline listeners requeue by re-sending a copy rather than by nacking the original
+  delivery, so settings that only shape nack redelivery (a Pub/Sub subscription retry policy, the SQS visibility
+  timeout) do not apply.
+
+Where redelivery hands back the original delivery rather than a copy Wolverine re-sent (a RabbitMQ or JetStream nack),
+Wolverine's attempt counter starts again with each redelivery, so a rule like `ScheduleRetry(...).Then.MoveToErrorQueue()`
+may never reach its last step. Configure the broker's own maximum delivery count or dead letter policy as the backstop.

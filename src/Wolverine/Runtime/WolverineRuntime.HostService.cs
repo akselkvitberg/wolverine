@@ -293,6 +293,7 @@ public partial class WolverineRuntime
                     Options.Policies.Add(new ServerlessEndpointsMustBeInlinePolicy());
 
                     await startMessagingTransportsAsync();
+                    warnIfScheduledRetriesCannotBeHeld();
                     break;
 
                 case DurabilityMode.MediatorOnly:
@@ -670,6 +671,29 @@ public partial class WolverineRuntime
         if (Storage is NullMessageStore) return;
         var state = await Storage.Nodes.LoadNodeAgentStateAsync(Cancellation);
         Restrictions = state.Restrictions;
+    }
+
+    /// <summary>
+    /// Serverless never starts the in-memory scheduled job processor, so with no message store a ScheduleRetry
+    /// can only be honored by a listener with native scheduling. On any other listener MessageContext.ReScheduleAsync
+    /// defers the message back to the transport and logs an error per message; say so once at startup too.
+    /// Handlers.Compile() has already run by this point, so the global and per-chain rules are settled.
+    /// RateLimitContinuation reschedules through the same path and gets the same fallback, but is not counted
+    /// here: its listener pause still supplies the delay.
+    /// </summary>
+    private void warnIfScheduledRetriesCannotBeHeld()
+    {
+        if (Storage is not NullMessageStore) return;
+
+        var scheduledRetriesConfigured = Handlers.Failures.AnyScheduledRetryPolicies()
+                                         || Handlers.Chains.Any(x => x.Failures.AnyScheduledRetryPolicies());
+        if (!scheduledRetriesConfigured) return;
+
+        Logger.LogWarning(
+            "ScheduleRetry error policies are configured, but Durability.Mode is {Mode} with no message store, so nothing in this process can hold a message until its retry time. "
+            + "On a listener without native scheduling, a scheduled retry is deferred back to the transport for redelivery instead, without the configured delay. "
+            + "Use a transport with native scheduling, RetryWithCooldown() for short in-process delays, or a queue-level delivery delay on the broker where one exists.",
+            Options.Durability.Mode);
     }
 
     private void startInMemoryScheduledJobs()

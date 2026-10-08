@@ -78,8 +78,21 @@ public class FailureRule : IEnumerable<FailureSlot>
     /// </summary>
     internal bool AnyRequeueContinuations()
     {
-        return _slots.Any(slot => slot.Sources.Any(x => x is RequeueContinuation))
-               || InfiniteSource is RequeueContinuation;
+        return anyContinuationSource<RequeueContinuation>();
+    }
+
+    /// <summary>
+    /// Does any attempt of this rule schedule a retry? Used to warn at startup when nothing in the process can
+    /// hold a scheduled retry (Serverless with no message store).
+    /// </summary>
+    internal bool AnyScheduledRetryContinuations()
+    {
+        return anyContinuationSource<ScheduledRetryContinuation>();
+    }
+
+    private bool anyContinuationSource<T>() where T : IContinuationSource
+    {
+        return _slots.Any(slot => slot.Sources.Any(x => x is T)) || InfiniteSource is T;
     }
 
     public FailureSlot AddSlot(IContinuationSource source)

@@ -364,14 +364,25 @@ public class MessageContext : MessageBus, IMessageContext, IHasTenantId, IEnvelo
         }
 
         Runtime.MessageTracking.Requeued(Envelope);
-        Envelope.ScheduledTime = scheduledTime;
         if (tryGetRescheduler(_channel, Envelope) is ISupportNativeScheduling c)
         {
+            Envelope.ScheduledTime = scheduledTime;
             Runtime.Logger.LogDebug("Rescheduling envelope {EnvelopeId} ({MessageType}) via native scheduling to {ScheduledTime}", Envelope.Id, Envelope.MessageType, scheduledTime);
-            await c.MoveToScheduledUntilAsync(Envelope, Envelope.ScheduledTime.Value).ConfigureAwait(false);
+            await c.MoveToScheduledUntilAsync(Envelope, scheduledTime).ConfigureAwait(false);
+        }
+        else if (Storage is NullMessageStore { ScheduledJobs: null })
+        {
+            // Serverless with no message store: the in-memory scheduled job processor is never started, so
+            // NullMessageStore would drop the envelope on the floor and the message would never be retried.
+            // Hand it back to the transport instead. The delay is lost, but the message is kept.
+            Runtime.Logger.LogError(
+                "Envelope {EnvelopeId} ({MessageType}) received at {Address} cannot honor a scheduled retry: no message store is configured, no in-memory scheduler is running in this process (Durability.Mode is {Mode}), and the listener does not support native scheduling, so nothing can hold the message until {ScheduledTime}. Deferring it back to the transport for redelivery instead, without the delay.",
+                Envelope.Id, Envelope.MessageType, Envelope.Destination, Runtime.Options.Durability.Mode, scheduledTime);
+            await _channel.DeferAsync(Envelope).ConfigureAwait(false);
         }
         else
         {
+            Envelope.ScheduledTime = scheduledTime;
             Runtime.Logger.LogDebug("Rescheduling envelope {EnvelopeId} ({MessageType}) via durable inbox to {ScheduledTime}", Envelope.Id, Envelope.MessageType, scheduledTime);
             await Storage.Inbox.RescheduleExistingEnvelopeForRetryAsync(Envelope).ConfigureAwait(false);
         }
