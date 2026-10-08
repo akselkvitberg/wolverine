@@ -112,6 +112,23 @@ public class PubsubConfiguration : BrokerExpression<
     }
 
     /// <summary>
+    ///     Configure push delivery for every endpoint that calls UsePushDelivery(). Also turns on
+    ///     DurabilitySettings.UseSyncRetryBlock so cascaded sends retry inside the HTTP request instead of on a
+    ///     background thread that gets no CPU between requests on Cloud Run.
+    /// </summary>
+    public PubsubConfiguration ConfigurePushDelivery(Action<PubsubPushSettings> configure)
+    {
+        configure(Transport.Push);
+
+        // Must be set while options are configured: InlineSendingAgent reads it in its constructor
+        Options.Durability.UseSyncRetryBlock = true;
+        // Task 5: restore once PubsubPushProcessor exists
+        // Options.Services.AddSingleton<Push.PubsubPushProcessor>();
+
+        return this;
+    }
+
+    /// <summary>
     ///     Configure the <see cref="PublisherServiceApiClientBuilder" /> used to create the publisher API client.
     ///     Called after <see cref="EmulatorDetection" /> is applied, so this callback may override transport-level
     ///     defaults. Multiple calls compose in order.

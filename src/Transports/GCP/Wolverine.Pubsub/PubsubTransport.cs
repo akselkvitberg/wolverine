@@ -30,6 +30,11 @@ public class PubsubTransport : BrokerTransport<PubsubEndpoint>, IAsyncDisposable
     /// </summary>
     internal string NodeIdentifier => SoloNodeId ?? Math.Abs(AssignedNodeNumber).ToString();
     public PubsubDeadLetterOptions DeadLetter = new();
+
+    /// <summary>
+    ///     Settings for push delivery. See <see cref="PubsubConfiguration.ConfigurePushDelivery" />
+    /// </summary>
+    public PubsubPushSettings Push { get; } = new();
     public EmulatorDetection EmulatorDetection = EmulatorDetection.None;
 
     public string ProjectId = string.Empty;

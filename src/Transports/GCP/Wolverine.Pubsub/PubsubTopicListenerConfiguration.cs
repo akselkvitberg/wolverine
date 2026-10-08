@@ -96,6 +96,22 @@ public class PubsubTopicListenerConfiguration : InteroperableListenerConfigurati
     }
 
     /// <summary>
+    ///     Receive this endpoint's messages through Pub/Sub push (HTTP) instead of streaming pull. Requires
+    ///     DurabilityMode.Serverless, ConfigurePushDelivery() and MapWolverinePubsubPush() from
+    ///     WolverineFx.Pubsub.AspNetCore
+    /// </summary>
+    public PubsubTopicListenerConfiguration UsePushDelivery(Action<PubsubPushEndpointOptions>? configure = null)
+    {
+        add(e =>
+        {
+            e.DeliveryMode = PubsubDeliveryMode.Push;
+            configure?.Invoke(e.PushOptions);
+        });
+
+        return this;
+    }
+
+    /// <summary>
     ///     Customize the dead lettering for just this endpoint
     /// </summary>
     /// <param name="deadLetterName"></param>

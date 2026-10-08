@@ -40,6 +40,30 @@ public class PubsubEndpoint : Endpoint<IPubsubEnvelopeMapper, PubsubEnvelopeMapp
 
     public PubsubServerOptions Server = new();
 
+    /// <summary>
+    ///     Whether this listener pulls or receives push requests. Set with UsePushDelivery()
+    /// </summary>
+    public PubsubDeliveryMode DeliveryMode { get; internal set; } = PubsubDeliveryMode.Pull;
+
+    /// <summary>
+    ///     Per-endpoint push overrides
+    /// </summary>
+    public PubsubPushEndpointOptions PushOptions { get; } = new();
+
+    internal string? EffectiveServiceAccountEmail =>
+        PushOptions.ServiceAccountEmail ?? _transport.Push.ServiceAccountEmail;
+
+    internal string? EffectiveAudience =>
+        PushOptions.Audience ?? _transport.Push.Audience ?? _transport.Push.BaseUrl;
+
+    internal string? PushUrl => _transport.Push.PushUrlFor(EndpointName);
+
+    /// <summary>Read from the real subscription at startup (spec §5.2). Null until then, or if the read failed</summary>
+    internal int? ObservedAckDeadlineSeconds;
+
+    /// <summary>Read from the real subscription at startup (spec §5.2). Null until then, or if the read failed</summary>
+    internal bool? ObservedHasDeadLetterPolicy;
+
     internal PubsubTransport Transport => _transport;
 
     /// <summary>
