@@ -1,11 +1,13 @@
 using Google.Api.Gax;
 using Google.Api.Gax.Grpc;
 using Google.Cloud.PubSub.V1;
+using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
 using JasperFx.Core;
 using Microsoft.Extensions.Logging;
 using Wolverine.Configuration;
 using Wolverine.Pubsub.Internal;
+using Wolverine.Pubsub.Push;
 using Wolverine.Runtime;
 using Wolverine.Transports;
 using Wolverine.Transports.Sending;
@@ -259,12 +261,22 @@ public class PubsubEndpoint : Endpoint<IPubsubEnvelopeMapper, PubsubEnvelopeMapp
                 request.Filter = Server.Subscription.Options.Filter;
             }
 
+            if (DeliveryMode == PubsubDeliveryMode.Push)
+            {
+                request.PushConfig = buildPushConfig();
+            }
+
             await clients.SubscriberApiClient.CreateSubscriptionAsync(request);
         }
         catch (RpcException ex) when (ex.StatusCode == StatusCode.AlreadyExists)
         {
             logger.LogInformation("{Uri}: Google Cloud Platform Pub/Sub subscription \"{Subscription}\" already exists",
                 Uri, subscriptionName);
+
+            if (DeliveryMode == PubsubDeliveryMode.Push)
+            {
+                await alignPushConfigAsync(logger, clients, subscriptionName);
+            }
         }
         catch (Exception ex)
         {
@@ -323,6 +335,17 @@ public class PubsubEndpoint : Endpoint<IPubsubEnvelopeMapper, PubsubEnvelopeMapp
             return;
         }
 
+        if (DeliveryMode == PubsubDeliveryMode.Push)
+        {
+            // Pull on a push subscription is undocumented; Seek to now acknowledges every earlier message
+            await _transport.SubscriberApiClient.SeekAsync(new SeekRequest
+            {
+                SubscriptionAsSubscriptionName = Server.Subscription.Name,
+                Time = Timestamp.FromDateTime(DateTime.UtcNow)
+            });
+            return;
+        }
+
         try
         {
             var response = await _transport.SubscriberApiClient.PullAsync(
@@ -369,6 +392,12 @@ public class PubsubEndpoint : Endpoint<IPubsubEnvelopeMapper, PubsubEnvelopeMapp
 
     public override async ValueTask InitializeAsync(ILogger logger)
     {
+        if (DeliveryMode == PubsubDeliveryMode.Push && !_hasInitialized)
+        {
+            await initializePushAsync(logger);
+            return;
+        }
+
         if (IsExistingSubscription)
         {
             _hasInitialized = true;
@@ -397,6 +426,95 @@ public class PubsubEndpoint : Endpoint<IPubsubEnvelopeMapper, PubsubEnvelopeMapp
         }
 
         _hasInitialized = true;
+    }
+
+    private async Task initializePushAsync(ILogger logger)
+    {
+        var runtime = Runtime ?? throw new InvalidOperationException($"{Uri}: endpoint was not compiled before initialization");
+
+        PubsubPushValidation.AssertValid(this, runtime);
+
+        try
+        {
+            if (_transport.AutoProvision && !IsExistingSubscription)
+            {
+                await SetupAsync(logger);
+            }
+
+            await readSubscriptionAsync(logger);
+
+            if (_transport.AutoPurgeAllQueues)
+            {
+                await PurgeAsync(logger);
+            }
+        }
+        catch (Exception ex)
+        {
+            throw new WolverinePubsubTransportException(
+                $"{Uri}: Error trying to initialize Google Cloud Platform Pub/Sub push endpoint", ex);
+        }
+
+        PubsubPushValidation.LogWarnings(this, runtime, logger);
+        _hasInitialized = true;
+    }
+
+    // Spec §5.2 "startup read": the real ack deadline and dead letter policy, whoever created the subscription
+    private async Task readSubscriptionAsync(ILogger logger)
+    {
+        if (_transport.SubscriberApiClient is null) return;
+
+        try
+        {
+            var subscription = await _transport.SubscriberApiClient.GetSubscriptionAsync(
+                Server.Subscription.Name,
+                CallSettings.FromExpiration(Expiration.FromTimeout(TimeSpan.FromSeconds(5))));
+
+            ObservedAckDeadlineSeconds = subscription.AckDeadlineSeconds;
+            ObservedHasDeadLetterPolicy = subscription.DeadLetterPolicy != null;
+        }
+        catch (Exception e)
+        {
+            logger.LogWarning(e,
+                "{Uri}: Could not read Pub/Sub subscription {Subscription} at startup (needs pubsub.subscriptions.get); using the configured ack deadline and dead letter settings instead",
+                Uri, Server.Subscription.Name);
+        }
+    }
+
+    private PushConfig buildPushConfig()
+    {
+        var config = new PushConfig { PushEndpoint = PushUrl! };
+
+        if (EffectiveServiceAccountEmail.IsNotEmpty())
+        {
+            config.OidcToken = new PushConfig.Types.OidcToken
+            {
+                ServiceAccountEmail = EffectiveServiceAccountEmail,
+                Audience = EffectiveAudience ?? string.Empty
+            };
+        }
+
+        return config;
+    }
+
+    // The Cloud Run URL can change between deployments, and an existing pull subscription is converted to push
+    private async Task alignPushConfigAsync(ILogger logger, PubsubClientSet clients, SubscriptionName subscriptionName)
+    {
+        var existing = await clients.SubscriberApiClient!.GetSubscriptionAsync(subscriptionName);
+        var wanted = buildPushConfig();
+
+        if (existing.PushConfig?.PushEndpoint == wanted.PushEndpoint &&
+            Equals(existing.PushConfig?.OidcToken, wanted.OidcToken))
+        {
+            return;
+        }
+
+        await clients.SubscriberApiClient.ModifyPushConfigAsync(subscriptionName, wanted);
+
+        logger.LogInformation(
+            existing.PushConfig?.PushEndpoint.IsEmpty() ?? true
+                ? "{Uri}: Converted Pub/Sub subscription \"{Subscription}\" from pull to push, endpoint {PushEndpoint}"
+                : "{Uri}: Updated Pub/Sub subscription \"{Subscription}\" push endpoint to {PushEndpoint}",
+            Uri, subscriptionName, wanted.PushEndpoint);
     }
 
     public override ValueTask<IListener> BuildListenerAsync(IWolverineRuntime runtime, IReceiver receiver)
