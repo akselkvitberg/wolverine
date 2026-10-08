@@ -59,6 +59,14 @@ public class FailureRuleCollection : IEnumerable<FailureRule>
         return MaximumAttempts.HasValue || _rules.Any(x => x.AnyRequeueContinuations());
     }
 
+    /// <summary>
+    /// Does any rule in this collection use ScheduleRetry() / ScheduleRetryIndefinitely()?
+    /// </summary>
+    internal bool AnyScheduledRetryPolicies()
+    {
+        return _rules.Any(x => x.AnyScheduledRetryContinuations());
+    }
+
     internal IContinuation DetermineExecutionContinuation(Exception e, Envelope envelope)
     {
         foreach (var rule in _rules)

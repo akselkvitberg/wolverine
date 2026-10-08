@@ -136,6 +136,35 @@ public class hot_tail_requeue_policy_validation
         rules.AnyRequeuePolicies().ShouldBeTrue();
     }
 
+    [Fact]
+    public void schedule_retry_counts_as_a_scheduled_retry_policy()
+    {
+        var rules = new PolicyHolder();
+        rules.OnException<DivideByZeroException>().ScheduleRetry(1.Seconds());
+
+        rules.Failures.AnyScheduledRetryPolicies().ShouldBeTrue();
+    }
+
+    [Fact]
+    public void schedule_retry_indefinitely_counts_as_a_scheduled_retry_policy()
+    {
+        var rules = new PolicyHolder();
+        rules.OnException<DivideByZeroException>().ScheduleRetryIndefinitely(1.Seconds());
+
+        rules.Failures.AnyScheduledRetryPolicies().ShouldBeTrue();
+    }
+
+    [Fact]
+    public void requeue_and_in_lane_retries_are_not_scheduled_retry_policies()
+    {
+        var rules = new PolicyHolder();
+        rules.OnException<DivideByZeroException>().RetryTimes(3);
+        rules.OnException<TimeoutException>().Requeue(3);
+
+        rules.Failures.AnyScheduledRetryPolicies().ShouldBeFalse();
+        new FailureRuleCollection().AnyScheduledRetryPolicies().ShouldBeFalse();
+    }
+
     #endregion
 
     private class PolicyHolder : IWithFailurePolicies

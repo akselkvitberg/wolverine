@@ -82,6 +82,16 @@ public class FailureRule : IEnumerable<FailureSlot>
                || InfiniteSource is RequeueContinuation;
     }
 
+    /// <summary>
+    /// Does any attempt of this rule schedule the message for a later retry? Push transports use this to warn when a
+    /// scheduled retry turns into a broker redelivery whose attempt count cannot be recovered.
+    /// </summary>
+    internal bool AnyScheduledRetryContinuations()
+    {
+        return _slots.Any(slot => slot.Sources.Any(x => x is ScheduledRetryContinuation))
+               || InfiniteSource is ScheduledRetryContinuation;
+    }
+
     public FailureSlot AddSlot(IContinuationSource source)
     {
         var attempt = _slots.Count + 1;
