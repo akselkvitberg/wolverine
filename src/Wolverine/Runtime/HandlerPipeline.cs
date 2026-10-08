@@ -77,6 +77,21 @@ public class HandlerPipeline : IHandlerPipeline
         return InvokeAsync(envelope, channel, activity);
     }
 
+    /// <summary>
+    /// Start an execution span the way the 2-arg overload does and run the envelope for a caller that may give up.
+    /// Used to re-enter the pipeline for an inline retry so every attempt honors the same caller token.
+    /// </summary>
+    public Task InvokeAsync(Envelope envelope, IChannelCallback channel, CancellationToken callerCancellation)
+    {
+        if (_cancellation.IsCancellationRequested || callerCancellation.IsCancellationRequested)
+        {
+            return Task.CompletedTask;
+        }
+
+        var activity = TelemetryEnabled ? WolverineTracing.StartExecuting(envelope) : null;
+        return InvokeAsync(envelope, channel, activity, callerCancellation);
+    }
+
     public Task InvokeAsync(Envelope envelope, IChannelCallback channel, Activity? activity)
     {
         return InvokeAsync(envelope, channel, activity, CancellationToken.None);

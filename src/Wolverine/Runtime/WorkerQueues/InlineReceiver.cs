@@ -96,26 +96,6 @@ internal class InlineReceiver : IReceiver, ILatchedReceiver, IHasQueueDepth
         return new ValueTask(_drainComplete.Task.WaitAsync(_settings.DrainTimeout));
     }
 
-    public async ValueTask ReceivedAsync(IListener listener, Envelope[] messages)
-    {
-        if (messages.Length == 0) return;
-
-        stampReceipt();
-        Interlocked.Add(ref _inFlightCount, messages.Length);
-
-        foreach (var envelope in messages)
-        {
-            try
-            {
-                await ProcessMessageAsync(listener, envelope);
-            }
-            finally
-            {
-                DecrementInFlightCount();
-            }
-        }
-    }
-
     /// <summary>
     /// Process envelopes for a caller that may give up, such as a Pub/Sub push request. See
     /// <see cref="HandlerPipeline.InvokeAsync(Envelope, IChannelCallback, Activity?, CancellationToken)" />.
@@ -139,6 +119,9 @@ internal class InlineReceiver : IReceiver, ILatchedReceiver, IHasQueueDepth
             }
         }
     }
+
+    public ValueTask ReceivedAsync(IListener listener, Envelope[] messages)
+        => ReceivedAsync(listener, messages, CancellationToken.None);
 
     public async ValueTask ReceivedAsync(IListener listener, Envelope envelope)
     {

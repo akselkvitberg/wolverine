@@ -523,7 +523,15 @@ public class MessageContext : MessageBus, IMessageContext, IHasTenantId, IEnvelo
             throw new InvalidOperationException("No Envelope is active for this context");
         }
 
-        return (_channel.Pipeline ?? Runtime.Pipeline).InvokeAsync(Envelope, _channel!);
+        var pipeline = _channel.Pipeline ?? Runtime.Pipeline;
+
+        // Spec 6.4: an inline retry runs inside the same caller scope, so it must see the same caller token.
+        if (CallerCancellation.CanBeCanceled && pipeline is HandlerPipeline handlerPipeline)
+        {
+            return handlerPipeline.InvokeAsync(Envelope, _channel!, CallerCancellation);
+        }
+
+        return pipeline.InvokeAsync(Envelope, _channel!);
     }
 
     public async ValueTask SendAcknowledgementAsync()

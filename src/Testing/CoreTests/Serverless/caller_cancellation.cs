@@ -2,6 +2,7 @@ using JasperFx.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Wolverine;
+using Wolverine.ErrorHandling;
 using Wolverine.Runtime;
 using Wolverine.Transports;
 using Xunit;
@@ -13,9 +14,14 @@ public class caller_cancellation
     private static async Task<(IHost, HandlerPipeline)> buildAsync()
     {
         var host = await Host.CreateDefaultBuilder()
-            .UseWolverine(opts => opts.Discovery.DisableConventionalDiscovery()
+            .UseWolverine(opts =>
+            {
+                opts.Discovery.DisableConventionalDiscovery()
                 .IncludeType<WaitsForeverHandler>()
-                .IncludeType<ThrowsCancelledHandler>())
+                .IncludeType<ThrowsCancelledHandler>()
+                .IncludeType<FailsOnceThenWaitsHandler>();
+                opts.Policies.OnException<InvalidOperationException>().RetryTimes(2);
+            })
             .StartAsync(TestContext.Current.CancellationToken);
 
         var runtime = (WolverineRuntime)host.Services.GetRequiredService<IWolverineRuntime>();
@@ -68,6 +74,25 @@ public class caller_cancellation
         channel.Calls.ShouldContain("CompleteAsync");
     }
 
+    [Fact]
+    public async Task cancelled_caller_token_also_covers_inline_retry_attempts()
+    {
+        var (host, pipeline) = await buildAsync();
+        using var _ = host;
+
+        FailsOnceThenWaitsHandler.Attempts = 0;
+        var channel = new SettlementRecorder();
+        var envelope = new Envelope(new FailsOnceThenWaits()) { Destination = new Uri("stub://push") };
+        using var cts = new CancellationTokenSource(250.Milliseconds());
+
+        await pipeline.InvokeAsync(envelope, channel, null, cts.Token);
+
+        // attempt 1 threw and RetryNow ran attempt 2 inside the same call; attempt 2 saw the caller abort,
+        // so nothing was settled and no failure rule ran
+        FailsOnceThenWaitsHandler.Attempts.ShouldBe(2);
+        channel.Calls.ShouldBeEmpty();
+    }
+
     private class SettlementRecorder : IChannelCallback
     {
         public List<string> Calls { get; } = new();
@@ -89,10 +114,26 @@ public class caller_cancellation
 
 public record WaitsForever;
 public record ThrowsCancelled;
+public record FailsOnceThenWaits;
 
 public class WaitsForeverHandler
 {
     public static Task Handle(WaitsForever _, CancellationToken token) => Task.Delay(Timeout.Infinite, token);
+}
+
+public class FailsOnceThenWaitsHandler
+{
+    public static int Attempts;
+
+    public static Task Handle(FailsOnceThenWaits _, CancellationToken token)
+    {
+        if (Interlocked.Increment(ref Attempts) == 1)
+        {
+            throw new InvalidOperationException("first attempt fails");
+        }
+
+        return Task.Delay(Timeout.Infinite, token);
+    }
 }
 
 public class ThrowsCancelledHandler
