@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <PackageId>WolverineFx.Pubsub.AspNetCore</PackageId>
+        <Description>Google Cloud Platform Pub/Sub push delivery endpoint for Wolverine applications on ASP.NET Core</Description>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Wolverine.Pubsub\Wolverine.Pubsub.csproj"/>
+        <FrameworkReference Include="Microsoft.AspNetCore.App"/>
+    </ItemGroup>
+
+</Project>
