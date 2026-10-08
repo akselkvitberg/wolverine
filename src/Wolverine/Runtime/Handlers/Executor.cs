@@ -269,6 +269,13 @@ internal class Executor : IExecutor
 
             await context.ClearAllAsync().ConfigureAwait(false);
 
+            if (e is OperationCanceledException && context.CallerCancellation.IsCancellationRequested)
+            {
+                // The caller (e.g. a Pub/Sub push request) gave up. Leave the envelope unsettled: running the
+                // failure rules here could dead-letter a message the broker is about to redeliver. Spec §6.4.
+                return NullContinuation.Instance;
+            }
+
             Activity.Current?.SetStatus(ActivityStatusCode.Error, e.GetType().Name);
             return _rules.DetermineExecutionContinuation(e, envelope);
         }

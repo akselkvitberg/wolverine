@@ -116,6 +116,30 @@ internal class InlineReceiver : IReceiver, ILatchedReceiver, IHasQueueDepth
         }
     }
 
+    /// <summary>
+    /// Process envelopes for a caller that may give up, such as a Pub/Sub push request. See
+    /// <see cref="HandlerPipeline.InvokeAsync(Envelope, IChannelCallback, Activity?, CancellationToken)" />.
+    /// </summary>
+    internal async ValueTask ReceivedAsync(IListener listener, Envelope[] messages, CancellationToken cancellation)
+    {
+        if (messages.Length == 0) return;
+
+        stampReceipt();
+        Interlocked.Add(ref _inFlightCount, messages.Length);
+
+        foreach (var envelope in messages)
+        {
+            try
+            {
+                await ProcessMessageAsync(listener, envelope, cancellation);
+            }
+            finally
+            {
+                DecrementInFlightCount();
+            }
+        }
+    }
+
     public async ValueTask ReceivedAsync(IListener listener, Envelope envelope)
     {
         stampReceipt();
@@ -139,7 +163,8 @@ internal class InlineReceiver : IReceiver, ILatchedReceiver, IHasQueueDepth
         }
     }
 
-    private async ValueTask ProcessMessageAsync(IListener listener, Envelope envelope)
+    private async ValueTask ProcessMessageAsync(IListener listener, Envelope envelope,
+        CancellationToken cancellation = default)
     {
         if (_latched && (!_endpoint.ProcessInlineWhileDraining || _drainComplete.Task.IsCompleted))
         {
@@ -187,7 +212,14 @@ internal class InlineReceiver : IReceiver, ILatchedReceiver, IHasQueueDepth
                 return;
             }
 
-            await _pipeline.InvokeAsync(envelope, listener, activity!);
+            if (_pipeline is HandlerPipeline handlerPipeline)
+            {
+                await handlerPipeline.InvokeAsync(envelope, listener, activity, cancellation);
+            }
+            else
+            {
+                await _pipeline.InvokeAsync(envelope, listener, activity!);
+            }
 
             // GH-3710. Only a delivery the broker will not redeliver -- acked, or natively dead lettered --
             // may be remembered. A nack or requeue releases the id so the redelivery still runs.

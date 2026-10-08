@@ -154,7 +154,7 @@ public class inline_receiver_latch_defers_messages
 
         var envelope1 = ObjectMother.Envelope();
         var envelope2 = ObjectMother.Envelope();
-        await theReceiver.ReceivedAsync(theListener, new[] { envelope1, envelope2 });
+        await theReceiver.ReceivedAsync(theListener, new[] { envelope1, envelope2 }, TestContext.Current.CancellationToken);
 
         // Both messages should have been deferred
         await theListener.Received(1).DeferAsync(envelope1);

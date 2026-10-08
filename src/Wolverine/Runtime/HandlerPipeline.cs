@@ -77,13 +77,29 @@ public class HandlerPipeline : IHandlerPipeline
         return InvokeAsync(envelope, channel, activity);
     }
 
-    public async Task InvokeAsync(Envelope envelope, IChannelCallback channel, Activity? activity)
+    public Task InvokeAsync(Envelope envelope, IChannelCallback channel, Activity? activity)
     {
+        return InvokeAsync(envelope, channel, activity, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Run one envelope through the pipeline on behalf of a caller that may give up, such as an HTTP request.
+    /// When <paramref name="callerCancellation" /> is cancelled the handler sees cancellation and the envelope is
+    /// left unsettled for the caller to decide; failure rules do not run for it.
+    /// </summary>
+    public async Task InvokeAsync(Envelope envelope, IChannelCallback channel, Activity? activity,
+        CancellationToken callerCancellation)
+    {
+        using var linked = callerCancellation.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(_cancellation, callerCancellation)
+            : null;
+        var cancellation = linked?.Token ?? _cancellation;
+
         try
         {
             // Inside the try so the early return still stops the activity in the finally;
             // the 2-arg overload above relies on this method to stop what it started.
-            if (_cancellation.IsCancellationRequested)
+            if (cancellation.IsCancellationRequested)
             {
                 return;
             }
@@ -92,10 +108,11 @@ public class HandlerPipeline : IHandlerPipeline
 
             var context = _contextPool.Get();
             context.ReadEnvelope(envelope, channel);
+            context.CallerCancellation = callerCancellation;
 
             try
             {
-                var continuation = await executeAsync(context, envelope, activity).ConfigureAwait(false);
+                var continuation = await executeAsync(context, envelope, activity, cancellation).ConfigureAwait(false);
                 await continuation.ExecuteAsync(context, _runtime, DateTimeOffset.UtcNow, activity).ConfigureAwait(false);
             }
             catch (ObjectDisposedException)
@@ -363,7 +380,8 @@ public class HandlerPipeline : IHandlerPipeline
     // GH-4322: ValueTask because the deserialization pre-checks complete synchronously for the
     // common already-deserialized case and the success result is a singleton — Task<IContinuation>
     // was one box per message.
-    private async ValueTask<IContinuation> executeAsync(MessageContext context, Envelope envelope, Activity? activity)
+    private async ValueTask<IContinuation> executeAsync(MessageContext context, Envelope envelope, Activity? activity,
+        CancellationToken cancellation)
     {
         if (envelope.IsExpired())
         {
@@ -425,6 +443,6 @@ public class HandlerPipeline : IHandlerPipeline
             return new MoveToErrorQueue(e);
         }
 
-        return await executor.ExecuteAsync(context, _cancellation).ConfigureAwait(false);
+        return await executor.ExecuteAsync(context, cancellation).ConfigureAwait(false);
     }
 }

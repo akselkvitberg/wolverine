@@ -957,7 +957,15 @@ public class MessageContext : MessageBus, IMessageContext, IHasTenantId, IEnvelo
         Transaction = null;
         _sagaId = null;
         Tracker = null;
+        CallerCancellation = default;
     }
+
+    /// <summary>
+    /// The cancellation token of whoever is waiting on this message's processing, such as an HTTP request in Pub/Sub
+    /// push delivery. Default when nobody is. When it is cancelled, the executor leaves the envelope unsettled
+    /// instead of running failure rules.
+    /// </summary>
+    internal CancellationToken CallerCancellation { get; set; }
 
     public void SetSagaId(object sagaId) => _sagaId = sagaId;
 
