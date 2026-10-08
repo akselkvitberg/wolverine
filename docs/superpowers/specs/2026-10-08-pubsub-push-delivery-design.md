@@ -1,6 +1,6 @@
 # GCP Pub/Sub push delivery for Serverless (Cloud Run) — design
 
-- **Status:** draft, revised after the first review
+- **Status:** reviewed (three Fable passes, GCP facts checked against Google docs)
 - **Date:** 2026-10-08
 - **Branch:** `gcp-pubsub-push-spec`
 
@@ -26,7 +26,7 @@
 ### Success criteria
 
 1. A Cloud Run service on request-based billing receives Pub/Sub messages over push and runs the handler, its middleware, its error policies and its outgoing Pub/Sub publishes before the HTTP response is written.
-2. Ack/nack semantics are correct: no message is acked unless it was handled, discarded or dead-lettered, and every cascaded publish has completed.
+2. Ack/nack semantics are correct: no message is acked unless it was handled, discarded or dead-lettered, and every cascaded publish has completed. The exceptions are documented and logged: an unmappable message, a message type with no handler, an in-memory duplicate, and `MoveToErrorQueue` with no dead-letter destination (§4).
 3. Every Wolverine feature is either shown to work in push mode or fails with a clear error, and both lists are documented.
 4. Pull-mode Pub/Sub users are unaffected.
 
@@ -129,16 +129,20 @@ flowchart TD
 | `ScheduleRetry(delay)`, through `ISupportNativeScheduling` | 503 | Redelivers with the subscription's backoff. The requested delay is ignored, and the docs say so. |
 | `MoveToErrorQueue` with a dead-letter topic | 204, once the dead-letter publish has completed | Acks the message. Failure metadata is stamped as in `PubsubListener.MoveToErrorsAsync`, but the publish is awaited in-request instead of going through a `RetryBlock`. |
 | The dead-letter publish fails (recorded, not thrown) | 500 | Redelivers |
-| `MoveToErrorQueue` with dead-lettering disabled | 204, with an error log | Acks the message. The docs recommend a subscription `DeadLetterPolicy` plus requeue-based policies for native dead-lettering instead. |
+| `MoveToErrorQueue`, no Wolverine dead-letter topic, but the subscription has a `DeadLetterPolicy` | 503 | Redelivers until the subscription's policy forwards the message to its dead-letter topic. `PubsubPushDelivery` reports native dead-lettering whenever either destination exists, and nacks in this case. |
+| `MoveToErrorQueue` with no dead-letter destination at all | 204, with an error log | Acks and drops the message. A startup warning flags this configuration (§5.4). |
+| Message type with no handler | 204, logged | Acks; `NoHandlerContinuation` ends in `CompleteAsync` |
+| Duplicate within the `WithInMemoryIdempotency` window | 204 | Acks without handling (`InlineReceiver.cs:180-188`) |
 | An outgoing send fails, after in-request retries (§6.3) | 500 | Redelivers; the handler runs again |
 | The pipeline failed; the recovery path notified the channel (§6.3) and then called `CompleteAsync` | 500 | Redelivers |
 | The envelope was never settled, e.g. the runtime is shutting down | 503 | Redelivers, possibly to another instance |
-| Host stopping, or not fully started, before processing begins | 503 | Redelivers, possibly to another instance |
+| Host stopping, or not fully started, before processing begins | 503 | Redelivers, possibly to another instance. The processor calls `InlineReceiver.Latch()` on `ApplicationStopping`, so `ProcessMessageAsync` defers (`InlineReceiver.cs:144-156`). |
 | Body is not a valid push envelope | 400 | Treats it as a nack |
 | `subscription` does not match the endpoint | 400 | Treats it as a nack |
 | Unknown endpoint name, or endpoint in pull mode | 404 | Treats it as a nack |
 | Authentication fails (§5.3) | 401 or 403 | Treats it as a nack |
-| Message data cannot be mapped | 204, with an error log | Acks the message; also goes to the dead-letter topic if configured |
+| Message data cannot be mapped | 204, with an error log | Acks the message; the raw message also goes to the Wolverine dead-letter topic if configured |
+| Message data cannot be mapped and that dead-letter publish fails | 500 | Redelivers |
 
 Pub/Sub treats 102, 200, 201, 202 and 204 as an ack and any other status as a nack. Wolverine uses 204 for every ack. The different nack codes exist only for operators and logs.
 
@@ -169,7 +173,7 @@ Push endpoints have no `ListeningAgent` (finding 9), and Pub/Sub can't be told t
 When one push request carries several envelopes (the `batched` attribute):
 
 - The request returns 204 only when every envelope has been completed, discarded or dead-lettered.
-- If any envelope is nacked, the whole delivery is nacked, and envelopes that already succeeded run again on redelivery.
+- If any envelope is nacked, the whole delivery is nacked, and envelopes that already succeeded run again on redelivery. The status is that of the first failure recorded.
 - This is the same at-least-once behaviour as `NativeAck` (`PubsubHeldDeliveries`), and it is documented.
 
 ### Time limits
@@ -191,6 +195,7 @@ builder.Host.UseWolverine(opts =>
 
     opts.UsePubsub("my-project")
         .AutoProvision()
+        .EnableDeadLettering()         // otherwise MoveToErrorQueue acks and drops (§4)
         .ConfigurePushDelivery(push =>
         {
             push.BaseUrl = builder.Configuration["PUBSUB_PUSH_BASE_URL"]; // https://orders-abc.a.run.app
@@ -214,6 +219,7 @@ app.MapWolverinePubsubPush();          // POST /_wolverine/pubsub/{endpointName}
 - `MapWolverinePubsubPush()` reads `RoutePrefix` from the transport, so the provisioned URL and the mapped route cannot drift apart.
 - `MapWolverinePubsubPush()` returns an `IEndpointConventionBuilder`, so `.RequireAuthorization()`, rate limiting and similar conventions compose with it.
 - `UsePushDelivery()` is also available on `ListenToPubsubSubscription(...)` for existing, infrastructure-managed subscriptions.
+- `UsePushDelivery(p => ...)` can override `ServiceAccountEmail` and `Audience` per endpoint; anything not overridden uses the transport-wide value. `BaseUrl`, `RoutePrefix` and the authentication mode are transport-wide only, because one route serves every endpoint.
 
 ### 5.2 Provisioning
 
@@ -280,11 +286,14 @@ The host fails to start when:
 - a push endpoint uses `SubscriptionPerNode()`, because Cloud Run instances are not individually addressable;
 - a push endpoint sets `EnableExactlyOnceDelivery`, which Pub/Sub supports for pull subscriptions only;
 - a push endpoint configures `CircuitBreaker(...)` (§4);
-- no authentication mode is chosen.
+- no authentication mode is chosen;
+- `VerifyOidcToken()` is chosen with neither `BaseUrl` nor `Audience`;
+- `VerifyOidcToken()` is chosen without `ServiceAccountEmail`.
 
 It logs a warning, without failing, for:
 
 - push endpoints using requeue or scheduled-retry policies on a subscription without a dead-letter policy (§4);
+- push endpoints with neither a Wolverine dead-letter topic nor a subscription `DeadLetterPolicy`. Pub/Sub's Wolverine dead-letter topic is off by default (`PubsubDeadLetterOptions.Enabled = false`, `PubsubOptions.cs:100`), and with no destination `MoveToErrorQueue` acks and drops the message (§4);
 - `AllowUnauthenticated()`;
 - push endpoints configured while `MapWolverinePubsubPush()` was never called. This is detected when the host has fully started.
 
@@ -296,8 +305,13 @@ These are needed for push mode and also fix pull-based Serverless.
 
 - Today `MessageRouter.RouteForSend` / `RouteForPublish` pass `LocalDurableQueue` as an argument on every call (`MessageRouter.cs:89, 147`; `MessageRouterBase.cs:105, 137`). `MessageRoute.CreateForSending` only uses it in the scheduled branch (`MessageRoute.cs:243-247`).
 - A lazy property is not enough, because it would still be evaluated at every call site.
-- The fix: `MessageRouterBase` holds a `LazyLocalDurableSendingAgent : ISendingAgent` wrapper. Constructing it touches nothing. It resolves `local://durable` on first member access, which only happens when `Envelope.ForScheduledSend` uses it in the scheduled branch.
-  - In Serverless, first member access throws `InvalidOperationException` instead, naming the message type and destination: "scheduled or delayed delivery is not supported in Serverless mode for …". Pub/Sub's inline sender never schedules natively, so every scheduled send to Pub/Sub hits this.
+- The fix: `MessageRouterBase` holds a `LazyLocalDurableSendingAgent : ISendingAgent` wrapper. Constructing it touches nothing. Its members resolve `local://durable` on first access.
+- **The error must surface in the caller, not in the flush.**
+  - `Envelope.ForScheduledSend(sender)` only stores the agent (`EnvelopeScheduleExtensions.cs:9-24`).
+  - Left alone, the first member access would be `envelope.Sender!.IsDurable` inside the `try` in `FlushOutgoingMessagesAsync` (`MessageContext.cs:216`). There the exception would be caught, logged as "discarded" and dropped.
+  - So the scheduled branch of `MessageRoute.CreateForSending` (`MessageRoute.cs:243-247`) calls the wrapper's `Resolve()` explicitly before calling `ForScheduledSend`.
+  - In Serverless, `Resolve()` throws `InvalidOperationException`, naming the message type and destination: "scheduled or delayed delivery is not supported in Serverless mode for …". The exception comes out of `PublishAsync`, `SendAsync`, `ScheduleAsync` or the cascade call, in the caller.
+  - Pub/Sub's inline sender never schedules natively, so every scheduled send to Pub/Sub hits this.
   - The public `IMessageRoute.CreateForSending(..., ISendingAgent localDurableQueue, ...)` signature (`IMessageRoute.cs:12-13`) and every call site stay unchanged, so there is no breaking change.
 - Because the wrapper makes the router constructor free of side effects, re-enable `PrepopulateRoutingCache` for Serverless (`WolverineRuntime.HostService.cs:343-347`) and remove the TODO. That is a cold-start improvement.
 
@@ -332,7 +346,9 @@ The goal: when a cascaded publish to Pub/Sub ultimately fails, or the pipeline's
 - Add an `IHandlerPipeline.InvokeAsync` overload, or an `InlineReceiver` entry point, that takes a `CancellationToken`. The pipeline links it with the runtime's token.
 - The push processor passes `HttpContext.RequestAborted`. When Pub/Sub or Cloud Run abandons the request, the handler sees cancellation.
 - **Cancellation must not run failure policies.** `Executor.ExecuteAsync` catches every exception, including `OperationCanceledException`, and hands it to the failure rules (`Executor.cs:263-273`). With the default `MaximumAttempts = 3` (`FailureRuleCollection.cs:30`), that can end in `MoveToErrorQueue`, publishing to the dead-letter topic a message Pub/Sub is about to redeliver.
-  - So when the exception is an `OperationCanceledException` and the per-call token is cancelled, the executor skips the failure rules and returns a continuation that settles nothing.
+  - So when the exception is an `OperationCanceledException` and the **caller-supplied** token is cancelled, the executor skips the failure rules and returns a continuation that settles nothing.
+  - It must check the caller-supplied token, not the linked one. The linked token is also cancelled at runtime shutdown, and Buffered and Durable receivers run failure rules on shutdown cancellation today; that behaviour stays unchanged.
+  - `HandlerPipeline.InvokeAsync`'s early-return check (`HandlerPipeline.cs:86-89`) uses the linked token, so a request that was already aborted never starts its handler.
   - The envelope is then unsettled, which counts as failed (§4).
 - **Fallback.** If this can't be done cleanly in `Executor`, the `RequestAborted` wiring becomes opt-in (`push.CancelOnRequestAborted`, default off). The handler then runs to completion even after the request was abandoned, which only wastes work.
 
@@ -390,9 +406,9 @@ The core changes alter pull-based Serverless behaviour on their own, and §6.3 d
 **`CoreTests`**
 
 - Serverless publish and cascade to an external route work. This is the regression test for finding 1, using a shared-memory topic.
-- A scheduled send in Serverless gives the §6.1 error.
+- A scheduled send in Serverless throws the §6.1 error from the publish call itself (`PublishAsync` / `ScheduleAsync`), not from the flush. The same applies to a scheduled cascade, where the error policy runs.
 - A cascade with a local handler but no route throws; a message type with no handler keeps today's log message.
-- `OutgoingSendFailed` (§6.3) is called on a failed outgoing send, with `UseSyncRetryBlock` on.
+- `OutgoingSendFailed` (§6.3) is called on a failed outgoing send, using whichever §6.3 branch was chosen after the §9 item 4 verification.
 - `ProcessingFailed` (§6.3) is called before `CompleteAsync` when a continuation throws, e.g. `MoveToErrorQueue` with a failing failure acknowledgement.
 - The routing cache is pre-populated in Serverless, and constructing a router no longer touches `local://durable`.
 - The cancellation token from §6.4 reaches the handler, and a cancelled per-call token does not run failure rules.
