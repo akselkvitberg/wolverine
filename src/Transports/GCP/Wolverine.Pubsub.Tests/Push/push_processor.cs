@@ -39,6 +39,19 @@ public class push_processor
     }
 
     [Fact]
+    public async Task pull_mode_endpoint_is_404()
+    {
+        var topic = $"push-proc-{Guid.NewGuid():N}";
+        var pullTopic = $"pull-proc-{Guid.NewGuid():N}";
+        using var host = await StartPushHostAsync(topic, opts => opts.ListenToPubsubTopic(pullTopic));
+
+        var result = await processorFor(host).ProcessAsync(pullTopic, RequestFor(host, pullTopic, new PushPing("x")),
+            TestContext.Current.CancellationToken);
+
+        result.StatusCode.ShouldBe(404);
+    }
+
+    [Fact]
     public async Task subscription_from_an_unknown_project_is_400()
     {
         var topic = $"push-proc-{Guid.NewGuid():N}";

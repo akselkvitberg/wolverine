@@ -49,8 +49,12 @@ public class PubsubPushProcessor
     /// </summary>
     public void LatchAll()
     {
-        _latched = true;
-        foreach (var entry in _states.Enumerate()) entry.Value.Receiver.Latch();
+        // Under the lock so a state stateFor() is adding right now is either latched there or enumerated here
+        lock (_lock)
+        {
+            _latched = true;
+            foreach (var entry in _states.Enumerate()) entry.Value.Receiver.Latch();
+        }
     }
 
     /// <summary>
@@ -95,8 +99,10 @@ public class PubsubPushProcessor
             // Executor increments Attempts before each run, so the first execution sees deliveryAttempt
             if (request.DeliveryAttempt is > 1) envelope.Attempts = request.DeliveryAttempt.Value - 1;
 
-            foreach (var rule in state.IncomingRules) rule.Modify(envelope);
+            // Same order as pull: the tenant project stamp first, then the endpoint's own rules, so an explicit
+            // endpoint TenantId wins
             if (tenantId != null) envelope.TenantId = tenantId;
+            foreach (var rule in state.IncomingRules) rule.Modify(envelope);
         }
 
         var stopwatch = Stopwatch.StartNew();
@@ -155,7 +161,9 @@ public class PubsubPushProcessor
         try
         {
             var deadLetter = endpoint.Transport.Topics[endpoint.DeadLetterName!];
-            await clients.PublisherApiClient!.PublishAsync(new PublishRequest
+            var publisher = clients.PublisherApiClient ??
+                            throw new InvalidOperationException("the Pub/Sub publisher client is not connected");
+            await publisher.PublishAsync(new PublishRequest
             {
                 TopicAsTopicName = deadLetter.TopicNameFor(clients.ProjectId),
                 Messages = { message }
