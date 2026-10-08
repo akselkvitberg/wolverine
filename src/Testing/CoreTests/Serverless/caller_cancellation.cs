@@ -11,7 +11,7 @@ namespace CoreTests.Serverless;
 
 public class caller_cancellation
 {
-    private static async Task<(IHost, HandlerPipeline)> buildAsync()
+    private static async Task<(IHost, HandlerPipeline)> buildAsync(bool fullTracing = false)
     {
         var host = await Host.CreateDefaultBuilder()
             .UseWolverine(opts =>
@@ -19,8 +19,15 @@ public class caller_cancellation
                 opts.Discovery.DisableConventionalDiscovery()
                 .IncludeType<WaitsForeverHandler>()
                 .IncludeType<ThrowsCancelledHandler>()
-                .IncludeType<FailsOnceThenWaitsHandler>();
-                opts.Policies.OnException<InvalidOperationException>().RetryTimes(2);
+                .IncludeType<FailsOnceThenWaitsHandler>()
+                .IncludeType<WrapsCancellationHandler>();
+                opts.Policies.OnException<FirstAttemptFailure>().RetryTimes(2);
+
+                if (fullTracing)
+                {
+                    // Selects TracingExecutor instead of Executor
+                    opts.InvokeTracing = InvokeTracingMode.Full;
+                }
             })
             .StartAsync(TestContext.Current.CancellationToken);
 
@@ -101,6 +108,32 @@ public class caller_cancellation
         channel.Calls.ShouldBeEmpty();
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task caller_cancellation_surfacing_as_another_exception_type_leaves_the_envelope_unsettled(
+        bool fullTracing)
+    {
+        var (host, pipeline) = await buildAsync(fullTracing);
+        using var _ = host;
+
+        WrapsCancellationHandler.Reset();
+        var channel = new SettlementRecorder();
+        var envelope = new Envelope(new WrapsCancellation()) { Destination = new Uri("stub://push") };
+        using var cts = new CancellationTokenSource();
+
+        var invocation = pipeline.InvokeAsync(envelope, channel, null, cts.Token);
+
+        // Cancel only once the handler is running
+        await WrapsCancellationHandler.Started.Task.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        await cts.CancelAsync();
+        await invocation.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+
+        // The handler threw InvalidOperationException, not OperationCanceledException, yet the caller is gone:
+        // no failure rule ran and nothing was settled
+        channel.Calls.ShouldBeEmpty();
+    }
+
     private class SettlementRecorder : IChannelCallback
     {
         public List<string> Calls { get; } = new();
@@ -123,6 +156,33 @@ public class caller_cancellation
 public record WaitsForever;
 public record ThrowsCancelled;
 public record FailsOnceThenWaits;
+public record WrapsCancellation;
+
+public class FirstAttemptFailure : Exception;
+
+public class WrapsCancellationHandler
+{
+    public static TaskCompletionSource Started { get; private set; } = NewSignal();
+
+    private static TaskCompletionSource NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public static void Reset() => Started = NewSignal();
+
+    public static async Task Handle(WrapsCancellation _, CancellationToken token)
+    {
+        Started.TrySetResult();
+
+        try
+        {
+            await Task.Delay(Timeout.Infinite, token);
+        }
+        catch (OperationCanceledException e)
+        {
+            // A driver or domain layer that surfaces cancellation as its own exception type
+            throw new InvalidOperationException("The operation was cancelled", e);
+        }
+    }
+}
 
 public class WaitsForeverHandler
 {
@@ -147,7 +207,7 @@ public class FailsOnceThenWaitsHandler
     {
         if (Interlocked.Increment(ref Attempts) == 1)
         {
-            throw new InvalidOperationException("first attempt fails");
+            throw new FirstAttemptFailure();
         }
 
         SecondAttemptStarted.TrySetResult();

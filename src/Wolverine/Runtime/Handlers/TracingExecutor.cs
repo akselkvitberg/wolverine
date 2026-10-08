@@ -194,10 +194,14 @@ internal class TracingExecutor : IExecutor
 
             await context.ClearAllAsync();
 
-            if (e is OperationCanceledException && context.CallerCancellation.IsCancellationRequested)
+            if (context.CallerCancellation.IsCancellationRequested)
             {
                 // The caller (e.g. a Pub/Sub push request) gave up. Leave the envelope unsettled: running the
-                // failure rules here could dead-letter a message the broker is about to redeliver. Spec §6.4.
+                // failure rules here could dead-letter a message the broker is about to redeliver. Any exception
+                // counts, not just OperationCanceledException, because drivers and user code surface cancellation
+                // as their own types (SqlException, a domain exception wrapping the OCE), and once the caller is
+                // gone there is nothing left to settle. Checks the caller token, never the linked one: runtime
+                // shutdown cancellation must still reach the failure rules. Spec §6.4.
                 return NullContinuation.Instance;
             }
 
