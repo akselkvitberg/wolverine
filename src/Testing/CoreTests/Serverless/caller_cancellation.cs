@@ -80,12 +80,20 @@ public class caller_cancellation
         var (host, pipeline) = await buildAsync();
         using var _ = host;
 
-        FailsOnceThenWaitsHandler.Attempts = 0;
+        FailsOnceThenWaitsHandler.Reset();
         var channel = new SettlementRecorder();
         var envelope = new Envelope(new FailsOnceThenWaits()) { Destination = new Uri("stub://push") };
-        using var cts = new CancellationTokenSource(250.Milliseconds());
+        using var cts = new CancellationTokenSource();
 
-        await pipeline.InvokeAsync(envelope, channel, null, cts.Token);
+        var invocation = pipeline.InvokeAsync(envelope, channel, null, cts.Token);
+
+        // Cancel only once attempt 2 is running, so the abort cannot race the retry
+        await FailsOnceThenWaitsHandler.SecondAttemptStarted.Task.WaitAsync(10.Seconds(),
+            TestContext.Current.CancellationToken);
+        await cts.CancelAsync();
+
+        // Without the fix attempt 2 never sees the abort and this times out
+        await invocation.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
 
         // attempt 1 threw and RetryNow ran attempt 2 inside the same call; attempt 2 saw the caller abort,
         // so nothing was settled and no failure rule ran
@@ -125,6 +133,16 @@ public class FailsOnceThenWaitsHandler
 {
     public static int Attempts;
 
+    public static TaskCompletionSource SecondAttemptStarted { get; private set; } = NewSignal();
+
+    private static TaskCompletionSource NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public static void Reset()
+    {
+        Attempts = 0;
+        SecondAttemptStarted = NewSignal();
+    }
+
     public static Task Handle(FailsOnceThenWaits _, CancellationToken token)
     {
         if (Interlocked.Increment(ref Attempts) == 1)
@@ -132,6 +150,7 @@ public class FailsOnceThenWaitsHandler
             throw new InvalidOperationException("first attempt fails");
         }
 
+        SecondAttemptStarted.TrySetResult();
         return Task.Delay(Timeout.Infinite, token);
     }
 }
