@@ -1,6 +1,7 @@
 using Google.Api.Gax;
 using Google.Apis.Auth.OAuth2;
 using Google.Cloud.PubSub.V1;
+using Microsoft.Extensions.DependencyInjection;
 using Wolverine.Pubsub.Internal;
 using Wolverine.Transports;
 using Wolverine.Transports.Sending;
@@ -122,8 +123,7 @@ public class PubsubConfiguration : BrokerExpression<
 
         // Must be set while options are configured: InlineSendingAgent reads it in its constructor
         Options.Durability.UseSyncRetryBlock = true;
-        // Task 5: restore once PubsubPushProcessor exists
-        // Options.Services.AddSingleton<Push.PubsubPushProcessor>();
+        Options.Services.AddSingleton<Push.PubsubPushProcessor>();
 
         return this;
     }
