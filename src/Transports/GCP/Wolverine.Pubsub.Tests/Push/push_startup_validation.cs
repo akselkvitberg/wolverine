@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Shouldly;
 using Wolverine.ErrorHandling;
+using Wolverine.Transports;
 using Xunit;
 
 namespace Wolverine.Pubsub.Tests.Push;
@@ -9,18 +10,20 @@ public class push_startup_validation
 {
     private static async Task<Exception> startupFailure(Action<WolverineOptions> configure)
     {
-        return await Should.ThrowAsync<Exception>(async () =>
+        var ex = await Should.ThrowAsync<Exception>(async () =>
         {
             using var host = await Host.CreateDefaultBuilder()
                 .UseWolverine(opts =>
                 {
                     opts.Discovery.DisableConventionalDiscovery();
-                    // Validation runs inside the broker initialization retry loop; do not retry a configuration error
-                    opts.BrokerInitializationTimeout = TimeSpan.Zero;
                     configure(opts);
                 })
                 .StartAsync(TestContext.Current.CancellationToken);
         });
+
+        // Validation runs before the broker retry loop, so the configuration error is not retried and wrapped
+        ex.ShouldNotBeOfType<BrokerInitializationException>();
+        return ex;
     }
 
     private static void serverlessPush(WolverineOptions opts, Action<PubsubPushSettings> push,

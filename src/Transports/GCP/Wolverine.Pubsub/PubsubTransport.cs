@@ -5,6 +5,7 @@ using JasperFx.Core;
 using JasperFx.Descriptors;
 using Wolverine.Configuration;
 using Wolverine.Pubsub.Internal;
+using Wolverine.Pubsub.Push;
 using Wolverine.Runtime;
 using Wolverine.Transports;
 
@@ -236,6 +237,13 @@ public class PubsubTransport : BrokerTransport<PubsubEndpoint>, IAsyncDisposable
 
     protected override void tryBuildSystemEndpoints(IWolverineRuntime runtime)
     {
+        // The last hook before BrokerTransport's connect-and-retry loop, after every explicit endpoint is compiled.
+        // A push misconfiguration fails here at once instead of being retried for BrokerInitializationTimeout
+        foreach (var topic in Topics.Where(x => x.DeliveryMode == PubsubDeliveryMode.Push))
+        {
+            PubsubPushValidation.AssertValid(topic, runtime);
+        }
+
         if (!SystemEndpointsEnabled)
         {
             return;

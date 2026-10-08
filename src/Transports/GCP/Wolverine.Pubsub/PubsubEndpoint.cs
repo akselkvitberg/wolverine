@@ -432,8 +432,7 @@ public class PubsubEndpoint : Endpoint<IPubsubEnvelopeMapper, PubsubEnvelopeMapp
     {
         var runtime = Runtime ?? throw new InvalidOperationException($"{Uri}: endpoint was not compiled before initialization");
 
-        PubsubPushValidation.AssertValid(this, runtime);
-
+        // PubsubPushValidation.AssertValid already ran in PubsubTransport.tryBuildSystemEndpoints, before the retry loop
         try
         {
             if (_transport.AutoProvision && !IsExistingSubscription)
@@ -482,7 +481,10 @@ public class PubsubEndpoint : Endpoint<IPubsubEnvelopeMapper, PubsubEnvelopeMapp
 
     private PushConfig buildPushConfig()
     {
-        var config = new PushConfig { PushEndpoint = PushUrl! };
+        // Setup also runs from the resources command line, where AutoProvision() validation does not apply
+        var pushUrl = PushUrl ?? throw new InvalidOperationException(
+            $"{Uri}: provisioning a push subscription needs ConfigurePushDelivery(p => p.BaseUrl = ...) to build the push endpoint URL");
+        var config = new PushConfig { PushEndpoint = pushUrl };
 
         if (EffectiveServiceAccountEmail.IsNotEmpty())
         {
