@@ -5,13 +5,15 @@ namespace Wolverine.Pubsub.Tests;
 
 public static class TestingExtensions
 {
-    public const string EmulatorHost = "localhost:8085";
+    public const string EmulatorHost = EmulatorAddress + ":8085";
+
+    // The IPv4 literal, not "localhost". CI Linux runners publish the container port on IPv4 only,
+    // where [::1]:8085 is unreachable (#3191), and on Windows with WSL "localhost" resolves to ::1
+    // first, where wslrelay can hold the port and abort the connection.
+    private const string EmulatorAddress = "127.0.0.1";
 
     public static PubsubConfiguration UsePubsubTesting(this WolverineOptions options)
     {
-        // Use localhost (not the IPv6 literal [::1]) so this resolves to the IPv4 address that
-        // Docker publishes the emulator on. CI Linux runners publish the container port on IPv4
-        // only, where [::1]:8085 is unreachable. See #3191.
         Environment.SetEnvironmentVariable("PUBSUB_EMULATOR_HOST", EmulatorHost);
         Environment.SetEnvironmentVariable("PUBSUB_PROJECT_ID", "wolverine");
 
@@ -43,7 +45,7 @@ public static class TestingExtensions
         try
         {
             using var client = new TcpClient();
-            var connect = client.ConnectAsync("localhost", 8085);
+            var connect = client.ConnectAsync(EmulatorAddress, 8085);
             var completed = await Task.WhenAny(connect, Task.Delay(TimeSpan.FromSeconds(2)));
             return completed == connect && client.Connected;
         }
