@@ -21,6 +21,11 @@ public static class PubsubPushEndpointRouteBuilderExtensions
         var services = endpoints.ServiceProvider;
         var runtime = services.GetRequiredService<IWolverineRuntime>();
         var push = runtime.Options.Transports.GetOrCreate<PubsubTransport>().Push;
+        if (push.IsRouteMapped)
+        {
+            throw new InvalidOperationException("MapWolverinePubsubPush() was already called; it maps one route for every push endpoint");
+        }
+
         push.IsRouteMapped = true;
 
         var processor = services.GetRequiredService<PubsubPushProcessor>();

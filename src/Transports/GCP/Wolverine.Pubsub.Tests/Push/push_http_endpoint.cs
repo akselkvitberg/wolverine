@@ -1,3 +1,4 @@
+using Shouldly;
 using Alba;
 using Google.Apis.Auth;
 using Microsoft.AspNetCore.Builder;
@@ -57,7 +58,8 @@ public class push_http_endpoint
     [Fact]
     public async Task escaped_endpoint_names_still_route()
     {
-        var topic = $"push-http~{Guid.NewGuid():N}";
+        // '+' and '%' are legal in Pub/Sub names and are escaped in the URL, so the route value must be decoded
+        var topic = $"push-http+{Guid.NewGuid():N}%x";
         await using var host = await hostAsync(topic, p => p.AllowUnauthenticated());
 
         await host.Scenario(x =>
@@ -190,9 +192,82 @@ public class push_http_endpoint
         });
     }
 
+    [Fact]
+    public async Task verify_oidc_with_an_invalid_token_is_401()
+    {
+        var topic = $"push-http-{Guid.NewGuid():N}";
+        await using var host = await hostAsync(topic, p =>
+        {
+            p.BaseUrl = "https://svc.a.run.app";
+            p.ServiceAccountEmail = "push@wolverine.iam.gserviceaccount.com";
+            p.VerifyOidcToken();
+        }, new RejectingValidator());
+
+        await host.Scenario(x =>
+        {
+            x.Post.Text(bodyFor(host, topic, "x")).ToUrl($"/_wolverine/pubsub/{topic}");
+            x.WithRequestHeader("Authorization", "Bearer anything");
+            x.StatusCodeShouldBe(401);
+        });
+    }
+
+    [Fact]
+    public async Task verify_oidc_checks_the_base_url_as_audience()
+    {
+        var topic = $"push-http-{Guid.NewGuid():N}";
+        var validator = new FakeValidator("push@wolverine.iam.gserviceaccount.com");
+        await using var host = await hostAsync(topic, p =>
+        {
+            p.BaseUrl = "https://svc.a.run.app";
+            p.ServiceAccountEmail = "push@wolverine.iam.gserviceaccount.com";
+            p.VerifyOidcToken();
+        }, validator);
+
+        await host.Scenario(x =>
+        {
+            x.Post.Text(bodyFor(host, topic, "ok")).ToUrl($"/_wolverine/pubsub/{topic}");
+            x.WithRequestHeader("Authorization", "Bearer anything");
+            x.StatusCodeShouldBe(204);
+        });
+
+        validator.Audiences.ShouldBe(["https://svc.a.run.app"]);
+    }
+
+    [Theory]
+    [InlineData("W10")] // []
+    [InlineData("eyJlbWFpbCI6MX0")] // {"email":1}
+    public async Task trust_cloud_run_iam_ignores_a_forwarded_token_it_cannot_read(string payload)
+    {
+        var topic = $"push-http-{Guid.NewGuid():N}";
+        await using var host = await hostAsync(topic, p =>
+        {
+            p.BaseUrl = "https://svc.a.run.app";
+            p.ServiceAccountEmail = "push@wolverine.iam.gserviceaccount.com";
+            p.TrustCloudRunIam();
+        });
+
+        await host.Scenario(x =>
+        {
+            x.Post.Text(bodyFor(host, topic, "ok")).ToUrl($"/_wolverine/pubsub/{topic}");
+            x.WithRequestHeader("Authorization", $"Bearer e30.{payload}.sig");
+            x.StatusCodeShouldBe(204);
+        });
+    }
+
     private class FakeValidator(string email) : IPubsubPushTokenValidator
     {
+        public List<string> Audiences { get; } = [];
+
+        public Task<GoogleJsonWebSignature.Payload> ValidateAsync(string token, string audience)
+        {
+            Audiences.Add(audience);
+            return Task.FromResult(new GoogleJsonWebSignature.Payload { Email = email, EmailVerified = true });
+        }
+    }
+
+    private class RejectingValidator : IPubsubPushTokenValidator
+    {
         public Task<GoogleJsonWebSignature.Payload> ValidateAsync(string token, string audience) =>
-            Task.FromResult(new GoogleJsonWebSignature.Payload { Email = email, EmailVerified = true });
+            throw new InvalidJwtException("bad signature");
     }
 }

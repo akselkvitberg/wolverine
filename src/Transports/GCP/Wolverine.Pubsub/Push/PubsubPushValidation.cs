@@ -21,6 +21,9 @@ internal static class PubsubPushValidation
         if (transport.Protocol != PubsubTransport.ProtocolName)
             problems.Add("push delivery is only supported on the default Pub/Sub broker (UsePubsub), not named brokers");
 
+        if (push.RoutePrefix.Trim('/').IsEmpty())
+            problems.Add("RoutePrefix must not be empty; the push route is {RoutePrefix}/{endpointName}");
+
         if (push.Authentication == PubsubPushAuthentication.NotConfigured)
             problems.Add("no push authentication mode is chosen; call ConfigurePushDelivery(p => p.TrustCloudRunIam() / VerifyOidcToken() / AllowUnauthenticated())");
 

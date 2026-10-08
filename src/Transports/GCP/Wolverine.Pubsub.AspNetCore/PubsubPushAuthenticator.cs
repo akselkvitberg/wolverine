@@ -87,7 +87,11 @@ internal sealed class PubsubPushAuthenticator
             var payload = parts[1].Replace('-', '+').Replace('_', '/');
             payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
             using var json = JsonDocument.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(payload)));
-            return json.RootElement.TryGetProperty("email", out var email) ? email.GetString() : null;
+            return json.RootElement.ValueKind == JsonValueKind.Object &&
+                   json.RootElement.TryGetProperty("email", out var email) &&
+                   email.ValueKind == JsonValueKind.String
+                ? email.GetString()
+                : null;
         }
         catch (Exception e) when (e is FormatException or JsonException)
         {

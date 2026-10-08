@@ -74,7 +74,7 @@ await app.RunAsync();
 subscriptions. `UsePushDelivery(p => ...)` can override `ServiceAccountEmail` and `Audience` for one endpoint. `BaseUrl`,
 `RoutePrefix` and the authentication mode are transport-wide, because one route serves every endpoint.
 
-`MapWolverinePubsubPush()` returns an `IEndpointConventionBuilder`, so conventions such as `RequireAuthorization()` or
+Call `MapWolverinePubsubPush()` once; a second call throws. It returns an `IEndpointConventionBuilder`, so conventions such as `RequireAuthorization()` or
 rate limiting can be added to it. It reads `RoutePrefix` from the transport, so the provisioned URL and the mapped
 route use the same prefix.
 
@@ -89,6 +89,7 @@ The host fails to start, before any call to Pub/Sub, when:
 * The push endpoint is on a named broker.
 * No authentication mode is chosen.
 * `AutoProvision()` is on and there is no `BaseUrl`.
+* `RoutePrefix` is empty.
 * `BaseUrl` is not `https`, unless the mode is `AllowUnauthenticated()`.
 * The endpoint uses `SubscriptionPerNode()`, because Cloud Run instances are not individually addressable.
 * The endpoint enables exactly-once delivery, which Pub/Sub supports for pull subscriptions only.
@@ -136,7 +137,7 @@ Pub/Sub sends `POST {RoutePrefix}/{endpointName}` with a JSON body that wraps th
 * The handler, its middleware, its error policies and its outgoing Pub/Sub publishes complete before the response is
   written.
 * `HttpContext.RequestAborted` is passed to the handler as its cancellation token. When the request is abandoned,
-  failure policies do not run, and the response is not trusted.
+  failure policies do not run, and the request is answered 503 whatever the handler recorded.
 * A message that cannot be mapped is acknowledged and logged, and the raw message is published to the Wolverine
   dead letter topic if one is configured.
 

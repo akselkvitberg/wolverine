@@ -81,6 +81,17 @@ public class push_startup_validation
     }
 
     [Fact]
+    public async Task empty_route_prefix_fails()
+    {
+        var ex = await startupFailure(opts => serverlessPush(opts, p =>
+        {
+            p.RoutePrefix = "/";
+            p.AllowUnauthenticated();
+        }));
+        ex.ToString().ShouldContain("RoutePrefix");
+    }
+
+    [Fact]
     public async Task subscription_per_node_fails()
     {
         var ex = await startupFailure(opts =>
