@@ -18,12 +18,13 @@ namespace CoreTests.ErrorHandling;
 /// message store and a listener that cannot schedule natively there is nothing that can hold a message until
 /// a ScheduleRetry delay is up. The rescheduled envelope used to be handed to
 /// <c>NullMessageStore.RescheduleExistingEnvelopeForRetryAsync</c>, whose <c>ScheduledJobs?.Enqueue</c> is a
-/// no-op when the processor was never created, and the message was never retried.
+/// no-op when the processor was never created.
 ///
 /// <para>
-/// The SharedMemory transport stands in for a broker here: it runs in Serverless, it does not implement
-/// native scheduling, and its <c>DeferAsync</c> redelivers to the same listener, which is how a nack behaves
-/// on RabbitMQ.
+/// The SharedMemory transport stands in for a broker here: it runs in Serverless and does not implement native
+/// scheduling. Its <c>CompleteAsync</c> does nothing, so before the fix it behaved like a listener that acks on
+/// receipt (Inline Pub/Sub) and the message was lost. Its <c>DeferAsync</c> re-posts the envelope to the same
+/// listener, as the RabbitMQ listener's <c>DeferAsync</c> re-sends a copy to its queue.
 /// </para>
 /// </summary>
 public class schedule_retry_in_serverless_mode : IAsyncLifetime
