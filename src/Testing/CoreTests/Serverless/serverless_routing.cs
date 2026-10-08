@@ -63,8 +63,9 @@ public class serverless_routing
 
         // InvokeAsync rethrows when no inline continuation applies, which proves the error came out of the
         // handler (where failure policies run) rather than being logged and discarded by the flush
-        await Should.ThrowAsync<InvalidOperationException>(async () =>
+        var ex = await Should.ThrowAsync<InvalidOperationException>(async () =>
             await host.MessageBus().InvokeAsync(new ServerlessDelayedStart()));
+        ex.Message.ShouldContain("Scheduled or delayed delivery is not supported in Serverless mode");
     }
 }
 

@@ -9,6 +9,10 @@ namespace Wolverine.Runtime.Routing;
 /// </summary>
 public class NoExternalRouteInServerlessException : InvalidOperationException
 {
+    /// <summary>
+    /// Creates the exception for a message type that has a local handler but no route in Serverless mode.
+    /// </summary>
+    /// <param name="messageType">The message type that has a local handler but no route</param>
     public NoExternalRouteInServerlessException(Type messageType) : base(
         $"Message type {messageType.FullNameInCode()} has a local handler but no route. Serverless mode has no local queues, " +
         "so publish or cascade it to an external transport (for example a Pub/Sub topic) instead.")

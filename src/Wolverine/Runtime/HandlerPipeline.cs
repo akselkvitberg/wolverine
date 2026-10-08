@@ -67,7 +67,7 @@ public class HandlerPipeline : IHandlerPipeline
         // NOT a `using` declaration: this method is synchronous, so a `using` would dispose --
         // and therefore Stop() -- the activity as soon as the async overload below hits its
         // first suspension point, truncating the execution span to the synchronous prefix of
-        // message processing. The 3-arg overload's finally owns the Stop.
+        // message processing. The 4-arg overload's finally owns the Stop.
         var activity = TelemetryEnabled ? WolverineTracing.StartExecuting(envelope) : null;
 
         // No runtime check for HandlerExecutionDiagnosticsEnabled — diagnostic tag
