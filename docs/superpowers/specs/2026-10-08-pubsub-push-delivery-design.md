@@ -142,6 +142,13 @@ flowchart TD
 
 Pub/Sub treats 102, 200, 201, 202 and 204 as an ack and any other status as a nack. Wolverine uses 204 for every ack. The different nack codes exist only for operators and logs.
 
+How Pub/Sub reacts to nacks matters for throughput, and the docs explain it:
+
+- **Push window.** Pub/Sub decides push concurrency with a slow-start window. It grows on success and shrinks on every nack or timeout. So a requeue (503) slows delivery for the whole subscription, not just the one message.
+- **Push backoff.** After a nack or an expired deadline, Pub/Sub backs off exponentially between 100 ms and 60 s. This can't be turned off or tuned.
+- **Retry policy.** The subscription's retry policy (default minimum 10 s, maximum 600 s) applies on top; the effective delay is the larger of the two.
+- **Retries never stop.** Pub/Sub keeps redelivering until the message is acked. Only a subscription dead-letter policy (5 to 100 attempts) ends the loop for a message that fails forever.
+
 ### Pausing and circuit breakers are not supported
 
 Push endpoints have no `ListeningAgent` (finding 9), and Pub/Sub can't be told to stop pushing.
@@ -153,6 +160,8 @@ Push endpoints have no `ListeningAgent` (finding 9), and Pub/Sub can't be told t
 ### Retry counts
 
 - Pub/Sub sends `deliveryAttempt` only when the subscription has a dead-letter policy. Without one, every delivery counts as attempt 1, so "requeue N times, then dead-letter" never reaches N.
+- Even with a dead-letter policy, Google describes the count as best-effort; it can reset to zero. Wolverine's attempt-based policies are therefore best-effort across redeliveries, and the subscription's own dead-letter policy is the reliable stop. The docs say so.
+- **Ordering keys and dead-letter policies don't mix well.** Google doesn't guarantee ordering when a dead-letter topic is enabled. With ordering, push allows one outstanding message per key, and a redelivery resends every later message for that key, including ones already acked. The docs tell users to choose between ordering and a subscription dead-letter policy for each endpoint.
 - At startup, Wolverine logs a warning for any push endpoint that uses requeue or scheduled-retry policies on a subscription without a dead-letter policy. This check runs only when Wolverine can see the subscription's configuration: under `AutoProvision()`, or by reading the existing subscription.
 
 ### Batched deliveries
@@ -165,7 +174,8 @@ When one push request carries several envelopes (the `batched` attribute):
 
 ### Time limits
 
-- If processing outlives the subscription's ack deadline (at most 600 s), Pub/Sub may redeliver the message to another instance while the first is still running.
+- For push subscriptions the ack deadline is also the HTTP request timeout (default 10 s, maximum 600 s), and it can't be extended per message. If processing outlives it, Pub/Sub redelivers the message, possibly to another instance, while the first is still running.
+- Cloud Run's request timeout defaults to 300 s (maximum 3600 s). The docs tell users to set it at least as high as the ack deadline. Google's Cloud Run guide for Pub/Sub uses an ack deadline of 600 s, which needs a Cloud Run timeout of at least 600 s.
 - The processor tracks each request the way `AckExtensionWatchdog` does and logs a warning when a request outlives the ack deadline. The deadline used is the one read from the subscription at startup (§5.2). If that read fails, it falls back to `Server.Subscription.Options.AckDeadlineSeconds`.
 - In-request send retries (§6.3) and `RetryWithCooldown` delays count against the same deadline.
 - The docs say that Cloud Run's request timeout must be at least the ack deadline.
@@ -186,7 +196,7 @@ builder.Host.UseWolverine(opts =>
             push.BaseUrl = builder.Configuration["PUBSUB_PUSH_BASE_URL"]; // https://orders-abc.a.run.app
             push.RoutePrefix = "/_wolverine/pubsub";                      // default
             push.ServiceAccountEmail = "pubsub-push@my-project.iam.gserviceaccount.com";
-            push.Audience = "https://orders-abc.a.run.app";               // optional, see §5.3
+            push.Audience = "https://orders-abc.a.run.app";               // optional; defaults to BaseUrl, see §5.3
             push.TrustCloudRunIam();   // or VerifyOidcToken() / AllowUnauthenticated()
         });
 
@@ -219,7 +229,7 @@ app.MapWolverinePubsubPush();          // POST /_wolverine/pubsub/{endpointName}
   - It matters because the Cloud Run URL can change between deployments.
 - **Tenant projects.** The same push subscription, with the same URL, is provisioned in each tenant project. Each tenant project's Pub/Sub service agent must be allowed to mint tokens for `ServiceAccountEmail`; the docs say so.
 - **Dead-letter topic.** Provisioned as today; its subscription stays pull.
-- **Purge.** `AutoPurgeAllQueues` uses `Seek` to the current time for push subscriptions, because `Pull` on a push subscription fails.
+- **Purge.** `AutoPurgeAllQueues` uses `Seek` to the current time for push subscriptions. Google documents that this marks every earlier message as acknowledged. Google doesn't document what `Pull` does on a push subscription, so Wolverine doesn't rely on it. `Seek` is eventually consistent (Google says up to about a minute), which the docs mention for test setups.
 
 **Without `AutoProvision()`:**
 
@@ -237,10 +247,19 @@ This does not happen today: `InitializeAsync` returns immediately for existing s
 
 The authentication mode must be set explicitly; there is no silent default.
 
+**What Pub/Sub sends.** The push subscription's `OidcToken` makes Pub/Sub send `Authorization: Bearer <JWT>`. The token carries `aud`, `azp`, `email`, `email_verified`, `exp`, `iat`, `iss` (`https://accounts.google.com` or `accounts.google.com`) and `sub`.
+
+**Audience.**
+- If a subscription has no audience, Pub/Sub uses the push endpoint URL, including its path.
+- Cloud Run accepts only the service URL or a configured custom audience as `aud`. Google doesn't document whether a URL with a path is accepted. Google's tutorial pushes to the service URL with a trailing `/`, which avoids the question.
+- Wolverine's push URLs always have a path (`/_wolverine/pubsub/{endpointName}`). So `Audience` defaults to `BaseUrl`, the service URL, rather than Pub/Sub's own default. This applies both to provisioning and to `VerifyOidcToken()`.
+- Without `BaseUrl`, i.e. without `AutoProvision()`, `VerifyOidcToken()` requires an explicit `Audience`.
+- Cloud Run doesn't accept custom domains as `aud`. If the service is reached through a custom domain, `Audience` must still be the `run.app` URL or a custom audience configured on the service.
+
 | Mode | Use case | What the app checks |
 |---|---|---|
-| `TrustCloudRunIam()` | Cloud Run with `--no-allow-unauthenticated`, with `roles/run.invoker` granted to the push service account | No cryptographic check; the platform has already validated the token. If `ServiceAccountEmail` is set and the forwarded token carries an `email` claim, that claim must match. |
-| `VerifyOidcToken()` | Services that allow unauthenticated calls, GKE, other hosts | `GoogleJsonWebSignature.ValidateAsync` (Google.Apis.Auth, already a transitive dependency through Gax): signature, issuer, `aud` equal to `Audience` (default: the endpoint's push URL), `email` equal to `ServiceAccountEmail`, `email_verified`. Google's certificates are cached. |
+| `TrustCloudRunIam()` | Cloud Run with `--no-allow-unauthenticated`, with `roles/run.invoker` granted to the push service account | No cryptographic check; Cloud Run checks the token and the invoker role before the request reaches the container. Optionally, if `ServiceAccountEmail` is set, the `email` claim of the forwarded `Authorization` token is decoded **without** verifying it and compared. Google doesn't document whether Cloud Run forwards that header intact (§9), so this comparison is best-effort, and it is skipped with a debug log when the header is missing or can't be decoded. |
+| `VerifyOidcToken()` | Services that allow unauthenticated calls, GKE, other hosts | `GoogleJsonWebSignature.ValidateAsync` (Google.Apis.Auth, already a transitive dependency through Gax): signature, both issuer forms, `aud` equal to `Audience`, `email` equal to `ServiceAccountEmail`, `email_verified`. Google's certificates are cached. Combining it with Cloud Run IAM depends on §9 item 1. |
 | `AllowUnauthenticated()` | Pub/Sub emulator, tests | Nothing. Logs a warning at startup. |
 
 A failed check returns **401** when the token is missing or invalid, and **403** when the token is valid but for the wrong principal.
@@ -248,8 +267,8 @@ A failed check returns **401** when the token is missing or invalid, and **403**
 **IAM, documented but never granted by Wolverine:**
 
 - `roles/run.invoker` on the Cloud Run service, for the push service account.
-- `roles/iam.serviceAccountTokenCreator` on the push service account, for the Pub/Sub service agent (needed in older projects).
-- Pub/Sub admin or editor roles for the runtime identity when `AutoProvision()` is used.
+- `roles/iam.serviceAccountTokenCreator` on the push service account, for the Pub/Sub service agent. This is only needed for projects created on or before April 8, 2021.
+- Pub/Sub admin or editor roles for the runtime identity when `AutoProvision()` is used. The emulator doesn't support IAM, so none of this can be tested locally.
 
 ### 5.4 Startup validation
 
@@ -257,6 +276,7 @@ The host fails to start when:
 
 - a push endpoint is configured and `Durability.Mode` is not `Serverless`;
 - `AutoProvision()` is on and a push endpoint has no `BaseUrl`;
+- `BaseUrl` is not `https`, unless the mode is `AllowUnauthenticated()`. Production Pub/Sub only pushes to publicly reachable HTTPS endpoints with a CA-signed certificate, while the emulator uses `http`;
 - a push endpoint uses `SubscriptionPerNode()`, because Cloud Run instances are not individually addressable;
 - a push endpoint sets `EnableExactlyOnceDelivery`, which Pub/Sub supports for pull subscriptions only;
 - a push endpoint configures `CircuitBreaker(...)` (§4);
@@ -404,8 +424,10 @@ The sticky-failure behaviour of `PubsubPushDelivery` itself is tested in `Wolver
 
 **Optional end-to-end test**
 
-- The emulator delivers push requests to a Kestrel-hosted test app.
+- The emulator delivers push requests to a Kestrel-hosted test app over `http`; the emulator supports push subscriptions with unencrypted endpoints.
 - Skipped when the emulator cannot reach the host. `host.docker.internal` works on Windows and macOS; Linux CI needs an `extra_hosts: host-gateway` entry.
+
+**What the emulator can't cover.** The emulator supports neither IAM nor OIDC tokens, nor HTTPS endpoints. It also doesn't support seek-to-timestamp on ordered subscriptions. These are covered only by unit tests with a fake token validator. A manual check against real Cloud Run is listed in §9.
 
 The existing transport compliance suites assume a pull listener and are not reused.
 
@@ -418,7 +440,9 @@ The existing transport compliance suites assume a pull listener and are not reus
   - Authentication modes and IAM roles.
   - Provisioning, `BaseUrl` and `RoutePrefix`.
   - The status-code table (§4).
-  - Ack deadline versus Cloud Run request timeout.
+  - Ack deadline versus Cloud Run request timeout (300 s by default), with the recommended values.
+  - How push concurrency works (the slow-start window and push backoff), and Cloud Run concurrency and maximum instances as the limits users actually control.
+  - Ordering keys versus a subscription dead-letter policy (§4), and the best-effort `deliveryAttempt`.
   - The supported-features table (§7), with the idempotency requirement called out.
   - Local development with the emulator.
   - The path to durable support.
@@ -429,11 +453,41 @@ The existing transport compliance suites assume a pull listener and are not reus
 
 These are stated with uncertainty and must be checked before implementation depends on them.
 
-1. **Cloud Run and the forwarded ID token.** Does Cloud Run strip the signature of the ID token it forwards to the container when IAM authentication is enforced? If it does, `VerifyOidcToken()` cannot be combined with Cloud Run IAM, and the docs must say so. This is the reason the authentication mode is an explicit choice.
-2. **Cloud Run audience.** Which `aud` values does Cloud Run accept? Pub/Sub's default audience is the full push URL including the path. The docs currently plan to recommend setting `Audience` to the service base URL.
-3. **Emulator push support.** Does the Pub/Sub emulator deliver to push endpoints, and does it send `deliveryAttempt` and any token?
-4. **`RetryBlockSync` after the last retry.** Does it rethrow or only log? This decides where §6.3 hooks in. `RetryBlockSync` lives in JasperFx, not in this repo.
-5. **`Seek` purge.** Confirm that seeking a push subscription to the current time acknowledges all older messages.
+1. **Cloud Run and the forwarded `Authorization` header.**
+   - Google's docs say Cloud Run removes the token signature only for the `X-Serverless-Authorization` header. Pub/Sub sends `Authorization`.
+   - The docs don't say whether that header reaches the container, or whether its signature is removed.
+   - Test on a real Cloud Run service before documenting `VerifyOidcToken()` together with Cloud Run IAM, or the `TrustCloudRunIam()` email check.
+2. **Cloud Run and an audience with a path.**
+   - Google documents only the service URL and custom audiences.
+   - Wolverine defaults `Audience` to `BaseUrl` to avoid the question (§5.3).
+   - A real Cloud Run test should confirm that this default works.
+3. **Emulator and `deliveryAttempt`.** The emulator supports push and dead-letter forwarding, but Google doesn't say whether it fills in `deliveryAttempt`. Check with a test.
+4. **`RetryBlockSync` after the last retry.** Does it rethrow or only log? This decides the §6.3 branch. `RetryBlockSync` lives in JasperFx, not in this repo. First task of PR 1.
+
+### Checked against Google's documentation (2026-10-08)
+
+Google's documentation is now served from `docs.cloud.google.com`. Each point below was checked against the page listed, and the key ones were re-fetched by hand.
+
+| Fact used in this spec | Source |
+|---|---|
+| The push body has `message` (`data`, `attributes`, `messageId` / `message_id`, `publishTime` / `publish_time`, `orderingKey`), with `subscription` and `deliveryAttempt` at the top level | `/pubsub/docs/push` |
+| 102, 200, 201, 202 and 204 count as an ack; any other status means redelivery | `/pubsub/docs/push` |
+| The push request timeout is the ack deadline (default 10 s, maximum 600 s), and it can't be modified per message | `/pubsub/docs/push`, `/pubsub/docs/reference/rest/v1/projects.subscriptions` |
+| Slow-start push window and push backoff (100 ms to 60 s, not configurable); the retry policy defaults (10 s to 600 s); the effective delay is the larger of the two | `/pubsub/docs/push`, `/pubsub/docs/subscription-retry-policy` |
+| `deliveryAttempt` is set only when dead-lettering is enabled, and is best-effort | `/pubsub/docs/dead-letter-topics` |
+| `ModifyPushConfig` switches between pull and push; an empty config means pull | `/pubsub/docs/reference/rest/v1/projects.subscriptions/modifyPushConfig` |
+| Exactly-once delivery is for pull subscriptions only | `/pubsub/docs/exactly-once-delivery` |
+| `Seek` to a time acks every earlier message; it is eventually consistent | `/pubsub/docs/replay-overview` |
+| Without an audience, Pub/Sub uses the push endpoint URL; the token's claims and issuer | `/pubsub/docs/authenticate-push-subscriptions` |
+| `roles/run.invoker` for the push service account; Token Creator only for projects created on or before 2021-04-08 | `/run/docs/triggering/pubsub-push`, `/run/docs/tutorials/pubsub` |
+| Cloud Run's `aud` must be the service URL or a custom audience; custom domains are not accepted; signature removal is documented only for `X-Serverless-Authorization` | `/run/docs/authenticating/service-to-service` |
+| The emulator supports push (with `http`) and dead-letter forwarding; it supports neither IAM nor seek-to-timestamp on ordered subscriptions | `/pubsub/docs/emulator` |
+| Push with ordering allows one outstanding message per key; redelivery resends later messages; ordering is not guaranteed with a dead-letter topic | `/pubsub/docs/ordering` |
+| Push endpoints must be publicly reachable HTTPS addresses with CA-signed certificates | `/pubsub/docs/create-push-subscription` |
+| Cloud Run "request-based billing" (the default) versus "instance-based billing"; CPU is disabled or severely limited outside requests | `/run/docs/configuring/billing-settings` |
+| Cloud Run request timeout defaults to 300 s, maximum 3600 s | `/run/docs/configuring/request-timeout` |
+
+Google doesn't document what `Pull` does on a push subscription, so the spec doesn't rely on it.
 
 ### Closed during review
 
