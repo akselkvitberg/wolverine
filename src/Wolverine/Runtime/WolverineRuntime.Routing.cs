@@ -240,7 +240,7 @@ public partial class WolverineRuntime
 
         IMessageRouter router = routes.Count != 0
             ? new MessageRouter(this, messageType, routes)
-            : new EmptyMessageRouter(this, messageType);
+            : new EmptyMessageRouter(this, messageType, explainMissingLocalRoute(messageType));
 
         // Skip framework-internal types (IAgentCommand, INotToBeRouted, IInternalMessage,
         // and types from assemblies marked [ExcludeFromServiceCapabilities]) so they
@@ -288,6 +288,25 @@ public partial class WolverineRuntime
         }
 
         return routes;
+    }
+
+    // Serverless removes the local queues, so a message type that LocalRouting would send to a local queue
+    // in any other mode has no route here. Publishing it must not find "no subscribers" and drop it the way
+    // Wolverine does for a message type that nothing handles, so the router throws with this explanation.
+    private string? explainMissingLocalRoute(Type messageType)
+    {
+        if (Options.Durability.Mode != DurabilityMode.Serverless) return null;
+
+        if (!Options.HandlerGraph.CanHandle(messageType) &&
+            Options.BatchDefinitions.All(x => x.ElementType != messageType))
+        {
+            return null;
+        }
+
+        return $"{messageType.FullNameInCode()} is handled in this application, but " +
+               $"{nameof(DurabilityMode)}.{nameof(DurabilityMode.Serverless)} removes the local queues that would " +
+               "deliver it to that handler, and no other route is configured for it. Route it to an external " +
+               "transport, execute it inline with IMessageBus.InvokeAsync(), or use a different durability mode.";
     }
 
     public RoutingExplanation ExplainRoutingFor(Type messageType)

@@ -335,6 +335,10 @@ public partial class WolverineRuntime
             //     InvalidOperationException at send time (see
             //     EnvelopeScheduleExtensions.ForScheduledSendThroughLocalQueue)
             //     instead of UnknownTransportException at router construction.
+            //     A message type that is handled locally and has no other route
+            //     gets an EmptyMessageRouter that throws on publish (see
+            //     WolverineRuntime.explainMissingLocalRoute) rather than
+            //     dropping the message as having no subscribers.
             //     Router construction no longer depends on the local transport,
             //     so this mode could be pre-populated as well.
             var mode = Options.Durability.Mode;

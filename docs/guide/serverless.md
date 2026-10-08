@@ -51,10 +51,15 @@ using var host = await Host.CreateDefaultBuilder()
 <sup><a href='https://github.com/JasperFx/wolverine/blob/main/src/Samples/DocumentationSamples/DurabilityModes.cs#L12-L32' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_configuring_the_serverless_mode' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
-Serverless mode also removes Wolverine's local queues, including the local durable queue that holds a scheduled message
-until it is due when the destination transport cannot schedule it natively. In this mode, a [scheduled message](/guide/messaging/message-bus.html#scheduling-message-delivery-or-execution)
-can only be sent to an endpoint that supports native scheduled delivery for that message, like the [Azure Service Bus transport](/guide/messaging/transports/azureservicebus/scheduled).
-Scheduling a message to any other endpoint throws an `InvalidOperationException` when it is sent.
+Serverless mode also removes Wolverine's [local queues](/guide/messaging/transports/local). That has two consequences:
+
+1. A message that is handled in the same application can only be executed inline with `IMessageBus.InvokeAsync()`. Publishing,
+   sending, or scheduling it, cascading it from a handler or HTTP endpoint, or returning it as a [saga timeout](/guide/durability/sagas.html#timeout-messages)
+   throws an `IndeterminateRoutesException` unless the message is also routed to an external transport.
+2. The local durable queue that holds a scheduled message until it is due, when the destination transport cannot schedule
+   it natively, is not available. In this mode, a [scheduled message](/guide/messaging/message-bus.html#scheduling-message-delivery-or-execution)
+   can only be sent to an endpoint that supports native scheduled delivery for that message, like the [Azure Service Bus transport](/guide/messaging/transports/azureservicebus/scheduled).
+   Scheduling a message to any other endpoint throws an `InvalidOperationException` when it is sent.
 
 ## Pre-Generate All Types
 
