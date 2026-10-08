@@ -2,6 +2,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
 using Wolverine.ErrorHandling;
 using Wolverine.Pubsub.Push;
+using Wolverine.Runtime.Serialization;
+using Wolverine.Util;
 using Xunit;
 using static Wolverine.Pubsub.Tests.Push.PushTestSupport;
 
@@ -144,6 +146,84 @@ public class push_processor
         var result = await processorFor(host).ProcessAsync(topic, request!, TestContext.Current.CancellationToken);
 
         result.StatusCode.ShouldBe(204);
+    }
+
+    private static PubsubPushRequest batchedRequestFor(Microsoft.Extensions.Hosting.IHost host, string topic,
+        params PushPing[] pings)
+    {
+        var envelopes = pings.Select(ping => new Envelope(ping)
+        {
+            Data = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(ping),
+            ContentType = "application/json",
+            MessageType = typeof(PushPing).ToMessageTypeName()
+        }).ToList();
+
+        var endpoint = host.GetRuntime().Options.Transports.GetOrCreate<PubsubTransport>().Topics[topic];
+        var json = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            message = new
+            {
+                data = Convert.ToBase64String(EnvelopeSerializer.Serialize(envelopes)),
+                attributes = new Dictionary<string, string> { ["batched"] = "1" },
+                messageId = Guid.NewGuid().ToString()
+            },
+            subscription = endpoint.Server.Subscription.Name.ToString()
+        });
+
+        PubsubPushRequest.TryParse(System.Text.Encoding.UTF8.GetBytes(json), out var request, out var error)
+            .ShouldBeTrue(error);
+        return request!;
+    }
+
+    [Fact]
+    public async Task batched_request_where_every_envelope_succeeds_is_204()
+    {
+        var topic = $"push-proc-{Guid.NewGuid():N}";
+        using var host = await StartPushHostAsync(topic);
+        var first = Guid.NewGuid().ToString();
+        var second = Guid.NewGuid().ToString();
+
+        var result = await processorFor(host).ProcessAsync(topic,
+            batchedRequestFor(host, topic, new PushPing(first), new PushPing(second)),
+            TestContext.Current.CancellationToken);
+
+        result.StatusCode.ShouldBe(204);
+        PushPingHandler.Handled.ShouldContain(x => x.Name == first);
+        PushPingHandler.Handled.ShouldContain(x => x.Name == second);
+    }
+
+    [Fact]
+    public async Task batched_request_with_a_failure_and_no_dead_letter_destination_is_acked()
+    {
+        // No dead letter topic and no DeadLetterPolicy: MoveToErrorQueue acknowledges and drops the failed
+        // envelope, so every envelope settles as an ack and ResultFor answers 204
+        var topic = $"push-proc-{Guid.NewGuid():N}";
+        using var host = await StartPushHostAsync(topic);
+        var name = Guid.NewGuid().ToString();
+
+        var result = await processorFor(host).ProcessAsync(topic,
+            batchedRequestFor(host, topic, new PushPing(name), new PushPing("throw")),
+            TestContext.Current.CancellationToken);
+
+        result.StatusCode.ShouldBe(204);
+        PushPingHandler.Handled.ShouldContain(x => x.Name == name);
+    }
+
+    [Fact]
+    public async Task batched_request_is_all_or_nothing_when_one_envelope_is_requeued()
+    {
+        var topic = $"push-proc-{Guid.NewGuid():N}";
+        using var host = await StartPushHostAsync(topic,
+            opts => opts.OnException<DivideByZeroException>().Requeue());
+        var name = Guid.NewGuid().ToString();
+
+        var result = await processorFor(host).ProcessAsync(topic,
+            batchedRequestFor(host, topic, new PushPing(name), new PushPing("throw")),
+            TestContext.Current.CancellationToken);
+
+        // The successful envelope ran, but one non-ack outcome decides the whole request
+        result.StatusCode.ShouldBe(503);
+        PushPingHandler.Handled.ShouldContain(x => x.Name == name);
     }
 
     [Fact]

@@ -99,8 +99,8 @@ The host fails to start, before any call to Pub/Sub, when:
 Wolverine logs a warning, without failing, when:
 
 * A push endpoint has neither a Wolverine dead letter topic nor a subscription dead-letter policy.
-* Requeue policies exist and the subscription has no dead-letter policy. This check runs only when Wolverine can see
-  the subscription's configuration.
+* Requeue or scheduled retry policies exist and the subscription has no dead-letter policy. This check runs only when
+  Wolverine can see the subscription's configuration: under `AutoProvision()`, or by reading the existing subscription.
 * `AllowUnauthenticated()` is used.
 * Push endpoints are configured and `MapWolverinePubsubPush()` was never called.
 
@@ -153,7 +153,7 @@ The authentication mode must be set explicitly. There is no default.
 | Mode | Use case | What the app checks |
 |---|---|---|
 | `TrustCloudRunIam()` | Cloud Run with `--no-allow-unauthenticated`, with `roles/run.invoker` granted to the push service account | No cryptographic check. Cloud Run checks the token and the invoker role before the request reaches the container. If `ServiceAccountEmail` is set, the `email` claim of the forwarded `Authorization` token is decoded without verifying it and compared. Google does not document whether Cloud Run forwards that header intact, so the comparison is best-effort and is skipped when the header is missing or cannot be decoded. A mismatch returns 403. |
-| `VerifyOidcToken()` | Services that allow unauthenticated calls, GKE, other hosts | The token's signature, both issuer forms, `aud` equal to `Audience`, `email` equal to `ServiceAccountEmail`, and `email_verified`. A missing or invalid token returns 401. A valid token for another principal returns 403. |
+| `VerifyOidcToken()` | Services that allow unauthenticated calls, GKE, other hosts | The token's signature, both issuer forms, `aud` equal to `Audience`, `email` equal to `ServiceAccountEmail`, and `email_verified`. A missing or invalid token returns 401. A valid token for another principal returns 403. Any other validation failure, such as a failed certificate download, is logged as an error and returns 503 so Pub/Sub retries. |
 | `AllowUnauthenticated()` | Pub/Sub emulator, tests | Nothing. Logs a warning at startup. |
 
 Using `VerifyOidcToken()` together with Cloud Run IAM has not been verified against a real Cloud Run service. Google
@@ -203,14 +203,15 @@ With `AutoProvision()`:
 * `AutoPurgeAllQueues` uses `Seek` to the current time for push subscriptions. Google documents that this marks every
   earlier message as acknowledged, and that it is eventually consistent (up to about a minute). Test setups that
   purge should allow for that delay. Google does not document what `Pull` does on a push subscription, so Wolverine does
-  not use it.
+  not use it. If the `Seek` fails, Wolverine logs a warning and the host still starts; the old messages were not purged.
 
 Without `AutoProvision()`, `BaseUrl` is not required and Wolverine creates and modifies nothing. Infrastructure as code
 owns the subscription.
 
 In both cases, every push endpoint reads its subscription at startup. This verifies that the subscription exists, reads
 the real ack deadline and detects a missing dead-letter policy. The read needs `pubsub.subscriptions.get`. If it fails,
-Wolverine logs a warning and uses the configured values.
+Wolverine logs a warning and uses the configured values. If the subscription does not exist, Wolverine logs an error,
+because no push requests will arrive for that endpoint, and the host still starts.
 
 ## Acks, retries and dead letters
 
@@ -233,11 +234,12 @@ The different nack codes are for operators and logs.
 | An outgoing send fails after in-request retries | 500 | Redelivers, and the handler runs again |
 | The handler pipeline failed and its recovery path ran | 500 | Redelivers |
 | The envelope was never settled | 503 | Redelivers |
-| The host is stopping or not fully started, or the request was aborted by the caller | 503 | Redelivers, possibly to another instance |
+| The host is stopping or not fully started, or the request was aborted by the caller | 503 | Redelivers, possibly to another instance. While the host is starting or stopping the route answers 503 before it looks up the endpoint or checks the token |
 | Body is not a valid push envelope | 400 | Treats it as a nack |
 | `subscription` does not belong to the endpoint | 400 | Treats it as a nack |
 | Unknown endpoint name, or an endpoint in pull mode | 404 | Treats it as a nack |
 | Authentication fails | 401 or 403 | Treats it as a nack |
+| `VerifyOidcToken()` cannot validate the token for another reason, for example Google's certificates cannot be downloaded | 503, with an error log | Redelivers |
 | Message data cannot be mapped | 204, with an error log | Acks the message. The raw message also goes to the Wolverine dead letter topic if one is configured |
 | Message data cannot be mapped and that dead-letter publish fails | 500 | Redelivers |
 

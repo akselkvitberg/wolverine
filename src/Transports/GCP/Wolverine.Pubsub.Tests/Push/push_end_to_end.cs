@@ -19,7 +19,8 @@ public class push_end_to_end
         const int port = 5987;
         // The emulator runs in Docker; host.docker.internal reaches the test process on Windows and macOS.
         // Linux CI needs extra_hosts: "host.docker.internal:host-gateway" on the gcp-pubsub service.
-        var baseUrl = Environment.GetEnvironmentVariable("PUBSUB_PUSH_TEST_BASE_URL") ?? $"http://host.docker.internal:{port}";
+        var configuredBaseUrl = Environment.GetEnvironmentVariable("PUBSUB_PUSH_TEST_BASE_URL");
+        var baseUrl = configuredBaseUrl ?? $"http://host.docker.internal:{port}";
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
@@ -49,7 +50,15 @@ public class push_end_to_end
             await Task.Delay(250, TestContext.Current.CancellationToken);
         }
 
-        Assert.SkipWhen(!Push.PushPingHandler.Handled.Any(x => x.Name == name),
+        var handled = Push.PushPingHandler.Handled.Any(x => x.Name == name);
+
+        // An explicitly configured URL is expected to work; only the default host.docker.internal guess may skip
+        if (configuredBaseUrl != null)
+        {
+            Assert.True(handled, $"The emulator did not push to PUBSUB_PUSH_TEST_BASE_URL ({configuredBaseUrl}) within 30 seconds");
+        }
+
+        Assert.SkipWhen(!handled,
             "The emulator could not reach the test host; set PUBSUB_PUSH_TEST_BASE_URL or add host-gateway");
     }
 }

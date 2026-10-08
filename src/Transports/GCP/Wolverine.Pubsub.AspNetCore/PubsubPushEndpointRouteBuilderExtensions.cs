@@ -20,6 +20,9 @@ public static class PubsubPushEndpointRouteBuilderExtensions
     {
         var services = endpoints.ServiceProvider;
         var runtime = services.GetRequiredService<IWolverineRuntime>();
+        var processor = services.GetService<PubsubPushProcessor>() ?? throw new InvalidOperationException(
+            "MapWolverinePubsubPush() needs opts.UsePubsub(...).ConfigurePushDelivery(...) to be configured");
+
         var push = runtime.Options.Transports.GetOrCreate<PubsubTransport>().Push;
         if (push.IsRouteMapped)
         {
@@ -28,7 +31,6 @@ public static class PubsubPushEndpointRouteBuilderExtensions
 
         push.IsRouteMapped = true;
 
-        var processor = services.GetRequiredService<PubsubPushProcessor>();
         services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping.Register(processor.LatchAll);
 
         var validator = services.GetService<IPubsubPushTokenValidator>() ?? new GooglePubsubPushTokenValidator();
@@ -39,6 +41,13 @@ public static class PubsubPushEndpointRouteBuilderExtensions
         var prefix = "/" + push.RoutePrefix.Trim('/');
         return endpoints.MapPost(prefix + "/{endpointName}", async (HttpContext context, string endpointName) =>
         {
+            // Before the lookup and authentication: while starting, the transport may not be connected yet
+            if (!processor.IsAcceptingRequests)
+            {
+                context.Response.StatusCode = 503;
+                return;
+            }
+
             if (!processor.TryFindEndpoint(endpointName, out var endpoint))
             {
                 context.Response.StatusCode = 404;

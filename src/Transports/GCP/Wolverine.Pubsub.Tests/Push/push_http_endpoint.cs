@@ -254,6 +254,63 @@ public class push_http_endpoint
         });
     }
 
+    [Fact]
+    public async Task verify_oidc_when_the_validator_fails_for_another_reason_is_503()
+    {
+        var topic = $"push-http-{Guid.NewGuid():N}";
+        await using var host = await hostAsync(topic, p =>
+        {
+            p.BaseUrl = "https://svc.a.run.app";
+            p.ServiceAccountEmail = "push@wolverine.iam.gserviceaccount.com";
+            p.VerifyOidcToken();
+        }, new UnreachableValidator());
+
+        await host.Scenario(x =>
+        {
+            x.Post.Text(bodyFor(host, topic, "x")).ToUrl($"/_wolverine/pubsub/{topic}");
+            x.WithRequestHeader("Authorization", "Bearer anything");
+            x.StatusCodeShouldBe(503);
+        });
+    }
+
+    [Fact]
+    public async Task not_accepting_requests_is_503_before_the_endpoint_lookup()
+    {
+        var topic = $"push-http-{Guid.NewGuid():N}";
+        await using var host = await hostAsync(topic, p => p.AllowUnauthenticated());
+
+        // Same IsAcceptingRequests check the route makes while the host is starting
+        host.Services.GetRequiredService<Wolverine.Pubsub.Push.PubsubPushProcessor>().LatchAll();
+
+        await host.Scenario(x =>
+        {
+            x.Post.Text("{}").ToUrl("/_wolverine/pubsub/missing");
+            x.StatusCodeShouldBe(503);
+        });
+    }
+
+    [Fact]
+    public async Task mapping_the_route_without_configure_push_delivery_explains_what_is_missing()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Host.UseWolverine(opts =>
+        {
+            opts.Discovery.DisableConventionalDiscovery();
+            opts.UsePubsubTesting();
+        });
+        await using var app = builder.Build();
+
+        var ex = Should.Throw<InvalidOperationException>(() => app.MapWolverinePubsubPush());
+        ex.Message.ShouldBe(
+            "MapWolverinePubsubPush() needs opts.UsePubsub(...).ConfigurePushDelivery(...) to be configured");
+    }
+
+    private class UnreachableValidator : IPubsubPushTokenValidator
+    {
+        public Task<GoogleJsonWebSignature.Payload> ValidateAsync(string token, string audience) =>
+            throw new HttpRequestException("could not download Google's certificates");
+    }
+
     private class FakeValidator(string email) : IPubsubPushTokenValidator
     {
         public List<string> Audiences { get; } = [];

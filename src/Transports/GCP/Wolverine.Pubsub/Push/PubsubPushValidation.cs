@@ -1,5 +1,6 @@
 using JasperFx.Core;
 using Microsoft.Extensions.Logging;
+using Wolverine.ErrorHandling;
 using Wolverine.Runtime;
 
 namespace Wolverine.Pubsub.Push;
@@ -76,9 +77,17 @@ internal static class PubsubPushValidation
         if (endpoint.DeadLetterName.IsEmpty() && !hasDeadLetterPolicy)
             logger.LogWarning("{Uri}: This push endpoint has neither a Wolverine dead letter topic nor a subscription DeadLetterPolicy, so MoveToErrorQueue acknowledges and drops failed messages. Call EnableDeadLettering() or configure a DeadLetterPolicy", endpoint.Uri);
 
-        if (!hasDeadLetterPolicy && runtime is WolverineRuntime wolverineRuntime &&
-            (wolverineRuntime.Handlers.Failures.AnyRequeuePolicies() ||
-             wolverineRuntime.Handlers.Chains.Any(x => x.Failures.AnyRequeuePolicies())))
-            logger.LogWarning("{Uri}: Requeue policies are configured, but this push subscription has no DeadLetterPolicy, so Pub/Sub sends no deliveryAttempt and attempt counts restart at 1 on every redelivery", endpoint.Uri);
+        // Only when Wolverine can see the subscription's configuration: it read the subscription at startup, or it
+        // provisioned the subscription itself under AutoProvision()
+        var subscriptionConfigIsKnown = endpoint.ObservedHasDeadLetterPolicy.HasValue ||
+                                        (endpoint.Transport.AutoProvision && !endpoint.IsExistingSubscription);
+
+        if (subscriptionConfigIsKnown && !hasDeadLetterPolicy && runtime is WolverineRuntime wolverineRuntime &&
+            (anyRedeliveryPolicies(wolverineRuntime.Handlers.Failures) ||
+             wolverineRuntime.Handlers.Chains.Any(x => anyRedeliveryPolicies(x.Failures))))
+            logger.LogWarning("{Uri}: Requeue or scheduled retry policies are configured, but this push subscription has no DeadLetterPolicy, so Pub/Sub sends no deliveryAttempt and attempt counts restart at 1 on every redelivery", endpoint.Uri);
     }
+
+    private static bool anyRedeliveryPolicies(FailureRuleCollection failures) =>
+        failures.AnyRequeuePolicies() || failures.AnyScheduledRetryPolicies();
 }

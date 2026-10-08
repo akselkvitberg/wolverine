@@ -31,11 +31,18 @@ public class PubsubPushProcessor
     private PubsubTransport transport => _runtime.Options.Transports.GetOrCreate<PubsubTransport>();
 
     /// <summary>
-    /// Find the push-mode endpoint for a route value. Answered from the per-endpoint cache after the first request
+    /// False while the host is starting or stopping. Push requests are then answered 503 so Pub/Sub redelivers them
+    /// </summary>
+    public bool IsAcceptingRequests =>
+        !_latched && _runtime.FullyStarted.IsCompleted && !_runtime.Cancellation.IsCancellationRequested;
+
+    /// <summary>
+    /// Find the push-mode endpoint for a route value. Answered from the per-endpoint cache after the first processed
+    /// request. Never builds the cached state itself, because that needs the transport to be connected
     /// </summary>
     public bool TryFindEndpoint(string endpointName, out PubsubEndpoint? endpoint)
     {
-        endpoint = stateFor(endpointName)?.Endpoint;
+        endpoint = _states.TryFind(endpointName, out var state) ? state.Endpoint : scanForPushEndpoint(endpointName);
         return endpoint != null;
     }
 
@@ -63,11 +70,12 @@ public class PubsubPushProcessor
     public async Task<PubsubPushResult> ProcessAsync(string endpointName, PubsubPushRequest request,
         CancellationToken cancellation)
     {
-        if (_latched || !_runtime.FullyStarted.IsCompleted || _runtime.Cancellation.IsCancellationRequested)
+        if (!IsAcceptingRequests)
         {
             return PubsubPushResult.RetryLater("the host is not running");
         }
 
+        // The only place state is built: after the readiness check, so the transport's clients are connected
         var state = stateFor(endpointName);
         if (state == null)
         {

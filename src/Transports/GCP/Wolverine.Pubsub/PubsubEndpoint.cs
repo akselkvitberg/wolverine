@@ -338,11 +338,21 @@ public class PubsubEndpoint : Endpoint<IPubsubEnvelopeMapper, PubsubEnvelopeMapp
         if (DeliveryMode == PubsubDeliveryMode.Push)
         {
             // Pull on a push subscription is undocumented; Seek to now acknowledges every earlier message
-            await _transport.SubscriberApiClient.SeekAsync(new SeekRequest
+            try
             {
-                SubscriptionAsSubscriptionName = Server.Subscription.Name,
-                Time = Timestamp.FromDateTime(DateTime.UtcNow)
-            });
+                await _transport.SubscriberApiClient.SeekAsync(new SeekRequest
+                {
+                    SubscriptionAsSubscriptionName = Server.Subscription.Name,
+                    Time = Timestamp.FromDateTime(DateTime.UtcNow)
+                });
+            }
+            catch (Exception ex)
+            {
+                // Warning, not debug like pull: the old messages were not purged and will still be pushed
+                logger.LogWarning(ex, "{Uri}: Could not purge Pub/Sub push subscription {Subscription} with Seek",
+                    Uri, Server.Subscription.Name);
+            }
+
             return;
         }
 
@@ -470,6 +480,12 @@ public class PubsubEndpoint : Endpoint<IPubsubEnvelopeMapper, PubsubEnvelopeMapp
 
             ObservedAckDeadlineSeconds = subscription.AckDeadlineSeconds;
             ObservedHasDeadLetterPolicy = subscription.DeadLetterPolicy != null;
+        }
+        catch (RpcException e) when (e.StatusCode == StatusCode.NotFound)
+        {
+            logger.LogError(e,
+                "{Uri}: Pub/Sub subscription {Subscription} does not exist, so no push requests will arrive for this endpoint",
+                Uri, Server.Subscription.Name);
         }
         catch (Exception e)
         {

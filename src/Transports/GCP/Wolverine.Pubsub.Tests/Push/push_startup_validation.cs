@@ -1,4 +1,6 @@
+using JasperFx.Core;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Shouldly;
 using Wolverine.ErrorHandling;
 using Wolverine.Transports;
@@ -135,5 +137,69 @@ public class push_startup_validation
             p.VerifyOidcToken();
         }));
         ex.ToString().ShouldContain("ServiceAccountEmail");
+    }
+
+    private const string RedeliveryWarning = "Requeue or scheduled retry policies are configured";
+
+    private static async Task<RecordingLoggerProvider> startAndRecordAsync(bool autoProvision,
+        Action<WolverineOptions> policies)
+    {
+        var recorder = new RecordingLoggerProvider();
+        var topic = $"push-warn-{Guid.NewGuid():N}";
+
+        using var host = await Host.CreateDefaultBuilder()
+            .ConfigureLogging(x => x.AddProvider(recorder))
+            .UseWolverine(opts =>
+            {
+                opts.Durability.Mode = DurabilityMode.Serverless;
+                opts.Discovery.DisableConventionalDiscovery();
+                var pubsub = opts.UsePubsubTesting().ConfigurePushDelivery(p =>
+                {
+                    p.BaseUrl = "http://localhost:5999";
+                    p.AllowUnauthenticated();
+                });
+                if (autoProvision) pubsub.AutoProvision();
+                opts.ListenToPubsubTopic(topic).UsePushDelivery();
+                policies(opts);
+            })
+            .StartAsync(TestContext.Current.CancellationToken);
+
+        return recorder;
+    }
+
+    [Fact]
+    public async Task scheduled_retry_policy_without_a_dead_letter_policy_warns()
+    {
+        Assert.SkipUnless(await TestingExtensions.IsEmulatorAvailable(), "Pub/Sub emulator is not available");
+
+        var recorder = await startAndRecordAsync(true,
+            opts => opts.OnException<DivideByZeroException>().ScheduleRetry(1.Seconds()));
+
+        recorder.Warnings.ShouldContain(x => x.Contains(RedeliveryWarning));
+    }
+
+    [Fact]
+    public async Task requeue_policy_without_a_dead_letter_policy_warns()
+    {
+        Assert.SkipUnless(await TestingExtensions.IsEmulatorAvailable(), "Pub/Sub emulator is not available");
+
+        var recorder = await startAndRecordAsync(true,
+            opts => opts.OnException<DivideByZeroException>().Requeue());
+
+        recorder.Warnings.ShouldContain(x => x.Contains(RedeliveryWarning));
+    }
+
+    [Fact]
+    public async Task requeue_policy_does_not_warn_when_the_subscription_config_is_unknown()
+    {
+        Assert.SkipUnless(await TestingExtensions.IsEmulatorAvailable(), "Pub/Sub emulator is not available");
+
+        // No AutoProvision() and the subscription does not exist, so the startup read fails and Wolverine
+        // cannot tell whether the subscription has a DeadLetterPolicy
+        var recorder = await startAndRecordAsync(false,
+            opts => opts.OnException<DivideByZeroException>().Requeue());
+
+        recorder.Warnings.ShouldContain(x => x.Contains("does not exist"));
+        recorder.Warnings.ShouldNotContain(x => x.Contains(RedeliveryWarning));
     }
 }

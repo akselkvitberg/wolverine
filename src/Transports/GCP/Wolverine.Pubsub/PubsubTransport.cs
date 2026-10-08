@@ -3,6 +3,7 @@ using Google.Api.Gax;
 using Google.Cloud.PubSub.V1;
 using JasperFx.Core;
 using JasperFx.Descriptors;
+using Microsoft.Extensions.Logging;
 using Wolverine.Configuration;
 using Wolverine.Pubsub.Internal;
 using Wolverine.Pubsub.Push;
@@ -239,9 +240,17 @@ public class PubsubTransport : BrokerTransport<PubsubEndpoint>, IAsyncDisposable
     {
         // The last hook before BrokerTransport's connect-and-retry loop, after every explicit endpoint is compiled.
         // A push misconfiguration fails here at once instead of being retried for BrokerInitializationTimeout
-        foreach (var topic in Topics.Where(x => x.DeliveryMode == PubsubDeliveryMode.Push))
+        var pushEndpoints = Topics.Where(x => x.DeliveryMode == PubsubDeliveryMode.Push).ToArray();
+        foreach (var topic in pushEndpoints)
         {
             PubsubPushValidation.AssertValid(topic, runtime);
+        }
+
+        // ConfigurePushDelivery() has no logger, so the switch it made is reported here (spec §6.3)
+        if (pushEndpoints.Length > 0 && runtime.Options.Durability.UseSyncRetryBlock)
+        {
+            runtime.LoggerFactory.CreateLogger<PubsubTransport>().LogInformation(
+                "Pub/Sub push delivery turned on DurabilitySettings.UseSyncRetryBlock, so inline senders in this application retry on the caller's thread");
         }
 
         if (!SystemEndpointsEnabled)

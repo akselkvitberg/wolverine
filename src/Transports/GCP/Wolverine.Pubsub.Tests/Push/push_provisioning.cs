@@ -1,5 +1,6 @@
 using Google.Cloud.PubSub.V1;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Shouldly;
 using Xunit;
 
@@ -106,5 +107,104 @@ public class push_provisioning
                 opts.ListenToPubsubTopic(topic).UsePushDelivery();
             })
             .StartAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task failed_purge_does_not_block_startup()
+    {
+        Assert.SkipUnless(await TestingExtensions.IsEmulatorAvailable(), "Pub/Sub emulator is not available");
+        var topic = $"push-purge-missing-{Guid.NewGuid():N}";
+        var recorder = new RecordingLoggerProvider();
+
+        // No AutoProvision(), so the subscription does not exist and Seek fails
+        using var host = await Host.CreateDefaultBuilder()
+            .ConfigureLogging(x => x.AddProvider(recorder))
+            .UseWolverine(opts =>
+            {
+                opts.Durability.Mode = DurabilityMode.Serverless;
+                opts.Discovery.DisableConventionalDiscovery();
+                opts.UsePubsubTesting().AutoPurgeOnStartup()
+                    .ConfigurePushDelivery(p => p.AllowUnauthenticated());
+                opts.ListenToPubsubTopic(topic).UsePushDelivery();
+            })
+            .StartAsync(TestContext.Current.CancellationToken);
+
+        recorder.Warnings.ShouldContain(x => x.Contains("Could not purge Pub/Sub push subscription"));
+    }
+
+    [Fact]
+    public async Task existing_subscription_without_auto_provision_is_read_and_left_alone()
+    {
+        Assert.SkipUnless(await TestingExtensions.IsEmulatorAvailable(), "Pub/Sub emulator is not available");
+        var topic = $"push-existing-{Guid.NewGuid():N}";
+        var deadLetterTopic = $"push-existing-dlq-{Guid.NewGuid():N}";
+        var subscription = $"push-existing-sub-{Guid.NewGuid():N}";
+
+        // UsePubsubTesting() sets this too, but the admin clients are built before the host
+        Environment.SetEnvironmentVariable("PUBSUB_EMULATOR_HOST", TestingExtensions.EmulatorHost);
+        var publisher = await new PublisherServiceApiClientBuilder
+            { EmulatorDetection = Google.Api.Gax.EmulatorDetection.EmulatorOnly }.BuildAsync(TestContext.Current.CancellationToken);
+        var subscriber = await new SubscriberServiceApiClientBuilder
+            { EmulatorDetection = Google.Api.Gax.EmulatorDetection.EmulatorOnly }.BuildAsync(TestContext.Current.CancellationToken);
+
+        await publisher.CreateTopicAsync(new TopicName("wolverine", topic));
+        await publisher.CreateTopicAsync(new TopicName("wolverine", deadLetterTopic));
+        await subscriber.CreateSubscriptionAsync(new Subscription
+        {
+            SubscriptionName = new SubscriptionName("wolverine", subscription),
+            TopicAsTopicName = new TopicName("wolverine", topic),
+            AckDeadlineSeconds = 42,
+            PushConfig = new PushConfig { PushEndpoint = "http://localhost:5998/managed-elsewhere" },
+            DeadLetterPolicy = new DeadLetterPolicy
+            {
+                DeadLetterTopic = new TopicName("wolverine", deadLetterTopic).ToString(),
+                MaxDeliveryAttempts = 5
+            }
+        });
+
+        using var host = await Host.CreateDefaultBuilder()
+            .UseWolverine(opts =>
+            {
+                opts.Durability.Mode = DurabilityMode.Serverless;
+                opts.Discovery.DisableConventionalDiscovery();
+                opts.UsePubsubTesting().ConfigurePushDelivery(p =>
+                {
+                    p.BaseUrl = "http://localhost:5999";
+                    p.AllowUnauthenticated();
+                });
+                opts.ListenToPubsubSubscription(subscription).UsePushDelivery();
+            })
+            .StartAsync(TestContext.Current.CancellationToken);
+
+        var endpoint = host.GetRuntime().Options.Transports.GetOrCreate<PubsubTransport>().Topics
+            .Single(x => x.DeliveryMode == PubsubDeliveryMode.Push);
+        endpoint.ObservedAckDeadlineSeconds.ShouldBe(42);
+        endpoint.ObservedHasDeadLetterPolicy.ShouldBe(true);
+
+        // Without AutoProvision() Wolverine does not touch an existing subscription's push config
+        (await subscriber.GetSubscriptionAsync(new SubscriptionName("wolverine", subscription)))
+            .PushConfig.PushEndpoint.ShouldBe("http://localhost:5998/managed-elsewhere");
+    }
+
+    [Fact]
+    public async Task missing_existing_subscription_is_logged_as_an_error_and_the_host_starts()
+    {
+        Assert.SkipUnless(await TestingExtensions.IsEmulatorAvailable(), "Pub/Sub emulator is not available");
+        var subscription = $"push-missing-sub-{Guid.NewGuid():N}";
+        var recorder = new RecordingLoggerProvider();
+
+        using var host = await Host.CreateDefaultBuilder()
+            .ConfigureLogging(x => x.AddProvider(recorder))
+            .UseWolverine(opts =>
+            {
+                opts.Durability.Mode = DurabilityMode.Serverless;
+                opts.Discovery.DisableConventionalDiscovery();
+                opts.UsePubsubTesting().ConfigurePushDelivery(p => p.AllowUnauthenticated());
+                opts.ListenToPubsubSubscription(subscription).UsePushDelivery();
+            })
+            .StartAsync(TestContext.Current.CancellationToken);
+
+        // RecordingLoggerProvider keeps warnings and above without the level; this message is only logged as an error
+        recorder.Warnings.ShouldContain(x => x.Contains("does not exist, so no push requests will arrive"));
     }
 }

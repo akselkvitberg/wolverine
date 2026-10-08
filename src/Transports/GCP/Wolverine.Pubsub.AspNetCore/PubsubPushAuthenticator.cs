@@ -8,7 +8,8 @@ using Microsoft.Extensions.Logging;
 namespace Wolverine.Pubsub.AspNetCore;
 
 /// <summary>
-/// Spec §5.3. Returns null when the request may proceed, otherwise 401 or 403
+/// Spec §5.3. Returns null when the request may proceed, otherwise 401 or 403, or 503 when the token could not be
+/// validated for a reason other than the token itself
 /// </summary>
 internal sealed class PubsubPushAuthenticator
 {
@@ -57,6 +58,16 @@ internal sealed class PubsubPushAuthenticator
                 {
                     _logger.LogInformation(e, "Rejected a Pub/Sub push request with an invalid OIDC token");
                     return 401;
+                }
+                catch (OperationCanceledException) when (request.HttpContext.RequestAborted.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception e)
+                {
+                    // e.g. Google's certificates could not be downloaded; transient, so Pub/Sub should retry
+                    _logger.LogError(e, "Could not validate the Pub/Sub push token");
+                    return 503;
                 }
 
                 return payload.EmailVerified &&
