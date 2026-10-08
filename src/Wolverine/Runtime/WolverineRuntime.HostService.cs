@@ -9,6 +9,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Wolverine.Attributes;
 using Wolverine.Configuration;
+using Wolverine.Configuration.Capabilities;
 using Wolverine.ErrorHandling;
 using Wolverine.Persistence;
 using Wolverine.Persistence.Durability;
@@ -337,6 +338,11 @@ public partial class WolverineRuntime
             else if (mode != DurabilityMode.MediatorOnly)
             {
                 PrepopulateRoutingCache(Handlers.AllMessageTypes());
+            }
+
+            if (mode == DurabilityMode.Serverless)
+            {
+                warnAboutUnroutedCascadesInServerless();
             }
 
             await Observer.RuntimeIsFullyStarted();
@@ -1231,6 +1237,22 @@ public partial class WolverineRuntime
         }
 
         Options.LocalRouting.DiscoverListeners(this, handledMessageTypes);
+    }
+
+    private void warnAboutUnroutedCascadesInServerless()
+    {
+        var unrouted = Handlers.Chains
+            .SelectMany(x => x.PublishedTypes())
+            .Distinct()
+            .Where(t => !t.IsSystemMessageType() && Handlers.CanHandle(t) && RoutingFor(t).Routes.Length == 0)
+            .Select(t => t.FullNameInCode())
+            .ToArray();
+
+        if (unrouted.Length == 0) return;
+
+        Logger.LogWarning(
+            "Serverless mode has no local queues, but these message types are cascaded by handlers and only have local handlers, so publishing them will fail: {MessageTypes}. Route them to an external transport, for example a Pub/Sub topic.",
+            string.Join(", ", unrouted));
     }
 
     internal Task StartLightweightAsync()

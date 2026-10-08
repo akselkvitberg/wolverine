@@ -2,6 +2,7 @@ using System.Diagnostics;
 using JasperFx.Core;
 using JasperFx.Core.Reflection;
 using JasperFx.MultiTenancy;
+using Wolverine.Configuration.Capabilities;
 using Wolverine.Persistence.Durability;
 using Wolverine.Runtime.Routing;
 using Wolverine.Transports;
@@ -319,8 +320,21 @@ public partial class MessageBus : IMessageBus, IMessageContext
             return PersistOrSendAsync(outgoing);
         }
 
+        assertRoutableInServerless(message.GetType());
+
         Runtime.MessageTracking.NoRoutesFor(new Envelope(message));
         return ValueTask.CompletedTask;
+    }
+
+    private void assertRoutableInServerless(Type messageType)
+    {
+        if (Runtime.Options.Durability.Mode != DurabilityMode.Serverless) return;
+        if (messageType.IsSystemMessageType()) return;
+
+        if (Runtime is WolverineRuntime runtime && runtime.Handlers.CanHandle(messageType))
+        {
+            throw new NoExternalRouteInServerlessException(messageType);
+        }
     }
 
     public ValueTask BroadcastToTopicAsync(string topicName, object message, DeliveryOptions? options = null)
