@@ -40,7 +40,7 @@ var host = await Host.CreateDefaultBuilder()
             });
     }).StartAsync();
 ```
-<sup><a href='https://github.com/JasperFx/wolverine/blob/main/src/Transports/GCP/Wolverine.Pubsub.Tests/DocumentationSamples.cs#L64-L100' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_listen_to_pubsub_topic' title='Start of snippet'>anchor</a></sup>
+<sup><a href='https://github.com/JasperFx/wolverine/blob/main/src/Transports/GCP/Wolverine.Pubsub.Tests/DocumentationSamples.cs#L191-L227' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_listen_to_pubsub_topic' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
 ## Subscriptions across multiple nodes
@@ -237,3 +237,5 @@ sharing a group id from running concurrently. When ordering is enabled at the su
 serialisation is the binding one, because the second message never arrives to be partitioned. How the two
 mechanisms should combine for a future native-ack Pub/Sub endpoint is still open — see
 [#4052](https://github.com/JasperFx/wolverine/issues/4052).
+
+For Cloud Run with request-based billing, see [Push Delivery](/guide/messaging/transports/gcp-pubsub/push).

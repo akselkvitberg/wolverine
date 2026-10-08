@@ -79,3 +79,16 @@ endpoints:
 ```
 <sup><a href='https://github.com/JasperFx/wolverine/blob/main/src/Transports/RabbitMQ/Wolverine.RabbitMQ.Tests/Bugs/Bug_189_fails_if_there_are_many_messages_in_queue_on_startup.cs#L21-L33' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_usage_of_send_inline' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
+
+## Cloud Run and Pub/Sub push
+
+Cloud Run with request-based billing gives a container no CPU between requests, so a pull listener cannot run there.
+Wolverine can receive Google Cloud Pub/Sub messages through push subscriptions instead and process each message inside
+the push request. See [Push Delivery (Cloud Run)](/guide/messaging/transports/gcp-pubsub/push).
+
+Two rules apply to every Serverless application:
+
+* Every cascaded message needs an explicit external route, such as a Pub/Sub topic. A cascaded message that has only a
+  local handler throws `NoExternalRouteInServerlessException`, because local queues are not available in Serverless mode.
+* A scheduled or delayed send to a transport without native scheduling throws "Scheduled or delayed delivery is not
+  supported in Serverless mode". The exception is thrown from the call that sends or schedules the message.

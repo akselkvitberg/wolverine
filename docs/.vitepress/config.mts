@@ -230,6 +230,7 @@ const config: UserConfig<DefaultTheme.Config> = {
                                 {text: 'Google PubSub', link: '/guide/messaging/transports/gcp-pubsub/', items: [
                                         {text: 'Publishing', link:'/guide/messaging/transports/gcp-pubsub/publishing'},
                                         {text: 'Listening', link:'/guide/messaging/transports/gcp-pubsub/listening'},
+                                        {text: 'Push Delivery (Cloud Run)', link:'/guide/messaging/transports/gcp-pubsub/push'},
                                         {text: 'Dead Letter Queues', link:'/guide/messaging/transports/gcp-pubsub/deadlettering'},
                                         {text: 'Conventional Routing', link:'/guide/messaging/transports/gcp-pubsub/conventional-routing'},
                                         {text: 'Interoperability', link:'/guide/messaging/transports/gcp-pubsub/interoperability'},

@@ -3,8 +3,10 @@ using Google.Apis.Auth.OAuth2;
 using Google.Cloud.PubSub.V1;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Hosting;
 using Wolverine.ComplianceTests.Compliance;
+using Wolverine.Pubsub.AspNetCore;
 using Wolverine.Transports;
 using Wolverine.Transports.Sending;
 using Wolverine.Util;
@@ -28,6 +30,50 @@ public class DocumentationSamples
                     // Warning though, this is potentially slow
                     .AutoPurgeOnStartup();
             }).StartAsync();
+
+        #endregion
+    }
+
+    public async Task configure_pubsub_push_delivery()
+    {
+        #region sample_pubsub_push_delivery
+
+        var builder = WebApplication.CreateBuilder();
+
+        builder.Host.UseWolverine(opts =>
+        {
+            // Push delivery only runs in Serverless mode: no background agents, every endpoint Inline
+            opts.Durability.Mode = DurabilityMode.Serverless;
+
+            opts.UsePubsub("my-project")
+                .AutoProvision()
+
+                // Without a dead letter destination, MoveToErrorQueue acknowledges and drops failed messages
+                .EnableDeadLettering()
+
+                .ConfigurePushDelivery(push =>
+                {
+                    // The Cloud Run service URL. AutoProvision writes {BaseUrl}/_wolverine/pubsub/{endpoint}
+                    // into each push subscription
+                    push.BaseUrl = builder.Configuration["PUBSUB_PUSH_BASE_URL"];
+                    push.ServiceAccountEmail = "pubsub-push@my-project.iam.gserviceaccount.com";
+
+                    // Cloud Run deployed with --no-allow-unauthenticated checks the token for us
+                    push.TrustCloudRunIam();
+                });
+
+            opts.ListenToPubsubTopic("orders").UsePushDelivery();
+
+            // Every cascaded message needs an external route in Serverless mode
+            opts.PublishMessage<OrderShipped>().ToPubsubTopic("order-shipped");
+        });
+
+        var app = builder.Build();
+
+        // From WolverineFx.Pubsub.AspNetCore
+        app.MapWolverinePubsubPush();
+
+        await app.RunAsync();
 
         #endregion
     }
@@ -551,3 +597,5 @@ public class RollingCredentialSource
 
 #endregion
 public record ColorMessage(string Color);
+
+public record OrderShipped(string OrderId);
