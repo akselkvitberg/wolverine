@@ -16,7 +16,7 @@ internal class ShardedMessageRoute : IMessageRoute
         _slots = slots;
     }
 
-    public Envelope CreateForSending(object message, DeliveryOptions? options, ISendingAgent localDurableQueue,
+    public Envelope CreateForSending(object message, DeliveryOptions? options, ISendingAgent? localDurableQueue,
         WolverineRuntime runtime, string? topicName)
     {
         var envelope = new Envelope(message);

@@ -51,6 +51,11 @@ using var host = await Host.CreateDefaultBuilder()
 <sup><a href='https://github.com/JasperFx/wolverine/blob/main/src/Samples/DocumentationSamples/DurabilityModes.cs#L12-L32' title='Snippet source file'>snippet source</a> | <a href='#snippet-sample_configuring_the_serverless_mode' title='Start of snippet'>anchor</a></sup>
 <!-- endSnippet -->
 
+Serverless mode also removes Wolverine's local queues, including the local durable queue that holds a scheduled message
+until it is due when the destination transport cannot schedule it natively. In this mode, a [scheduled message](/guide/messaging/message-bus.html#scheduling-message-delivery-or-execution)
+can only be sent to an endpoint that supports native scheduled delivery for that message, like the [Azure Service Bus transport](/guide/messaging/transports/azureservicebus/scheduled).
+Scheduling a message to any other endpoint throws an `InvalidOperationException` when it is sent.
+
 ## Pre-Generate All Types
 
 The runtime code generation that Wolverine does comes with a potentially non-trivial "cold start" problem with its first

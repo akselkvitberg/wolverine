@@ -172,7 +172,7 @@ internal sealed class TopicPerTenantRoute(IReadOnlyDictionary<string, AzureServi
     public Envelope CreateForSending(
         object message,
         DeliveryOptions? options,
-        ISendingAgent localDurableQueue,
+        ISendingAgent? localDurableQueue,
         WolverineRuntime runtime,
         string? topicName)
     {

@@ -255,7 +255,7 @@ outgoing message to a single subscribing endpoint:
 /// </summary>
 public interface IMessageRoute
 {
-    Envelope CreateForSending(object message, DeliveryOptions? options, ISendingAgent localDurableQueue,
+    Envelope CreateForSending(object message, DeliveryOptions? options, ISendingAgent? localDurableQueue,
         WolverineRuntime runtime, string? topicName);
 
     MessageSubscriptionDescriptor Describe();

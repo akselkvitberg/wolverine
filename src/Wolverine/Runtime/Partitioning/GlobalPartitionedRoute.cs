@@ -33,7 +33,7 @@ internal class GlobalPartitionedRoute : IMessageRoute
         _nativeAcks = nativeAcks;
     }
 
-    public Envelope CreateForSending(object message, DeliveryOptions? options, ISendingAgent localDurableQueue,
+    public Envelope CreateForSending(object message, DeliveryOptions? options, ISendingAgent? localDurableQueue,
         WolverineRuntime runtime, string? topicName)
     {
         var envelope = new Envelope(message);

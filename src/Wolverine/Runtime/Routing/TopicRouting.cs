@@ -36,7 +36,7 @@ public class TopicRouting<T> : IMessageRouteSource, IMessageRoute, IMessageInvok
         yield return _topicEndpoint;
     }
 
-    public Envelope CreateForSending(object message, DeliveryOptions? options, ISendingAgent localDurableQueue,
+    public Envelope CreateForSending(object message, DeliveryOptions? options, ISendingAgent? localDurableQueue,
         WolverineRuntime runtime, string? topicName)
     {
         if (message is T typedMessage)

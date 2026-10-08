@@ -3,7 +3,7 @@ using JasperFx.Core;
 using JasperFx.Core.Reflection;
 using Wolverine.Attributes;
 using Wolverine.Configuration;
-using Wolverine.Transports;
+using Wolverine.Runtime.Scheduled;
 using Wolverine.Transports.Sending;
 
 namespace Wolverine.Runtime.Routing;
@@ -32,8 +32,10 @@ public abstract class MessageRouterBase : IMessageRouter
     {
         MessageType = messageType ?? throw new ArgumentNullException(nameof(messageType));
 
-        // We'll use this for executing scheduled envelopes that aren't native
-        LocalDurableQueue = runtime.Endpoints.GetOrBuildSendingAgent(TransportConstants.DurableLocalUri);
+        // Used to hold scheduled envelopes that the destination transport cannot schedule natively.
+        // Null in Serverless mode, which removes the local transport; CreateForSending throws at send
+        // time if a scheduled send then needs it.
+        LocalDurableQueue = runtime.TryFindLocalDurableQueue();
 
         var chain = runtime.Handlers.ChainFor(messageType);
         if (chain != null)
@@ -84,7 +86,11 @@ public abstract class MessageRouterBase : IMessageRouter
 
     internal WolverineRuntime Runtime { get; }
 
-    public ISendingAgent LocalDurableQueue { get; }
+    /// <summary>
+    ///     The local durable queue used to hold scheduled envelopes the destination transport cannot schedule
+    ///     natively. Null in <see cref="DurabilityMode.Serverless" />, which has no local transport.
+    /// </summary>
+    public ISendingAgent? LocalDurableQueue { get; }
 
     public List<IEnvelopeRule> HandlerRules { get; } = new();
     public abstract IMessageRoute[] Routes { get; }

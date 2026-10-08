@@ -21,7 +21,7 @@ internal class TransformedMessageRoute<TSource, TDestination> : IMessageRoute
         return descriptor;
     }
 
-    public Envelope CreateForSending(object message, DeliveryOptions? options, ISendingAgent localDurableQueue,
+    public Envelope CreateForSending(object message, DeliveryOptions? options, ISendingAgent? localDurableQueue,
         WolverineRuntime runtime, string? topicName)
     {
         var transformed = _transformation((TSource)message);

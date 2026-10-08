@@ -54,9 +54,7 @@ internal class DestinationEndpoint : IDestinationEndpoint
         var utcNow = DateTimeOffset.UtcNow;
         if (envelope.IsScheduledForLater(utcNow) && !_endpoint.Agent!.SupportsNativeScheduledSendFor(envelope, utcNow))
         {
-            var localDurableQueue =
-                _parent.Runtime.Endpoints.GetOrBuildSendingAgent(TransportConstants.DurableLocalUri);
-            envelope = envelope.ForScheduledSend(localDurableQueue);
+            envelope = envelope.ForScheduledSendThroughLocalQueue(_parent.Runtime.TryFindLocalDurableQueue());
         }
 
         _parent.TrackEnvelopeCorrelation(envelope, Activity.Current);
@@ -100,9 +98,7 @@ internal class DestinationEndpoint : IDestinationEndpoint
         var utcNow = DateTimeOffset.UtcNow;
         if (envelope.IsScheduledForLater(utcNow) && !_endpoint.Agent!.SupportsNativeScheduledSendFor(envelope, utcNow))
         {
-            var localDurableQueue =
-                _parent.Runtime.Endpoints.GetOrBuildSendingAgent(TransportConstants.DurableLocalUri);
-            envelope = envelope.ForScheduledSend(localDurableQueue);
+            envelope = envelope.ForScheduledSendThroughLocalQueue(_parent.Runtime.TryFindLocalDurableQueue());
         }
 
         _parent.TrackEnvelopeCorrelation(envelope, Activity.Current);

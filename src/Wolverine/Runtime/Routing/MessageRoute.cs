@@ -167,7 +167,7 @@ public class MessageRoute : IMessageRoute, IMessageInvoker
             $"Configure a local handler or use InvokeAsync<T> for remote request/reply.");
     }
 
-    public Envelope CreateForSending(object message, DeliveryOptions? options, ISendingAgent localDurableQueue,
+    public Envelope CreateForSending(object message, DeliveryOptions? options, ISendingAgent? localDurableQueue,
         WolverineRuntime runtime, string? topicName)
     {
         // GH-2897 defense-in-depth: a route can carry a null Sender if it was built during
@@ -242,8 +242,9 @@ public class MessageRoute : IMessageRoute, IMessageInvoker
             }
             else if (!sender.SupportsNativeScheduledSendFor(envelope, utcNow))
             {
+                var wrapped = envelope.ForScheduledSendThroughLocalQueue(localDurableQueue);
                 runtime.Logger.LogDebug("Envelope {EnvelopeId} ({MessageType}) wrapped for durable scheduled send to {Destination} (transport does not support native scheduling for this envelope)", envelope.Id, envelope.MessageType, envelope.Destination);
-                return envelope.ForScheduledSend(localDurableQueue);
+                return wrapped;
             }
             else
             {

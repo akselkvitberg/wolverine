@@ -17,7 +17,7 @@ internal class NoNamedEndpointRoute : IMessageRoute
 
     public string EndpointName { get; }
 
-    public Envelope CreateForSending(object message, DeliveryOptions? options, ISendingAgent localDurableQueue,
+    public Envelope CreateForSending(object message, DeliveryOptions? options, ISendingAgent? localDurableQueue,
         WolverineRuntime runtime, string? topicName)
     {
         throw new UnknownEndpointException(_message);
