@@ -150,10 +150,47 @@ public class push_delivery_settlement
         var failed = envelope();
         var delivery = deliveryFor(endpoint());
 
+        // Recorded in a different order than the request lists them: the request order decides
+        delivery.ProcessingFailed(failed, new DivideByZeroException());
         await delivery.CompleteAsync(ok);
         await delivery.DeferAsync(requeued);
-        delivery.ProcessingFailed(failed, new DivideByZeroException());
 
         delivery.ResultFor([ok, requeued, failed]).StatusCode.ShouldBe(503);
+        delivery.ResultFor([ok, failed, requeued]).StatusCode.ShouldBe(500);
+    }
+
+    [Fact]
+    public async Task a_failure_after_an_ack_wins()
+    {
+        // A handler succeeds, then flushing its cascades fails
+        var e = envelope();
+        var delivery = deliveryFor(endpoint());
+        await delivery.CompleteAsync(e);
+        delivery.ProcessingFailed(e, new DivideByZeroException());
+        delivery.ResultFor([e]).StatusCode.ShouldBe(500);
+    }
+
+    [Fact]
+    public async Task the_first_failure_wins_over_a_later_one()
+    {
+        var e = envelope();
+        var delivery = deliveryFor(endpoint());
+        await delivery.DeferAsync(e);
+        delivery.ProcessingFailed(e, new DivideByZeroException());
+        delivery.ResultFor([e]).StatusCode.ShouldBe(503);
+    }
+
+    [Fact]
+    public async Task dead_letter_with_an_observed_subscription_policy_is_503()
+    {
+        var ep = endpoint();
+        ep.ObservedHasDeadLetterPolicy = true;
+        var e = envelope();
+        var delivery = deliveryFor(ep);
+
+        await delivery.MoveToErrorsAsync(e, new DivideByZeroException());
+        await delivery.CompleteAsync(e);
+
+        delivery.ResultFor([e]).StatusCode.ShouldBe(503);
     }
 }

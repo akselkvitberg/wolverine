@@ -9,7 +9,7 @@ namespace Wolverine.Pubsub.Push;
 /// <summary>
 /// Plays the listener role for one push request and records how the pipeline settled each envelope. The HTTP
 /// response is computed from these outcomes once the pipeline returns (spec §4). Failure is sticky, settle calls
-/// never throw, and an envelope nobody settled counts as failed.
+/// never throw, and an envelope nobody settled is nacked (503).
 /// </summary>
 internal sealed class PubsubPushDelivery : IListener, ISupportDeadLetterQueue, ISupportNativeScheduling,
     IObserveChannelFailures
