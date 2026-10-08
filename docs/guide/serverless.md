@@ -98,6 +98,8 @@ Because the delay is lost, prefer one of these in Serverless functions:
   delivery, so settings that only shape nack redelivery (a Pub/Sub subscription retry policy, the SQS visibility
   timeout) do not apply.
 
-Where redelivery hands back the original delivery rather than a copy Wolverine re-sent (a RabbitMQ or JetStream nack),
+Where redelivery hands back the original delivery rather than a copy Wolverine re-sent, as a JetStream NAK does,
 Wolverine's attempt counter starts again with each redelivery, so a rule like `ScheduleRetry(...).Then.MoveToErrorQueue()`
-may never reach its last step. Configure the broker's own maximum delivery count or dead letter policy as the backstop.
+never reaches its last step. The broker's own delivery limit then ends the retries. On JetStream that is the consumer's
+`MaxDeliver` (`JetStreamDefaults.MaxDeliver`, default 5), after which the server stops redelivering the message
+without Wolverine's error handling having moved it to the dead-letter subject.
