@@ -3,7 +3,6 @@ using JasperFx.Core;
 using JasperFx.Core.Reflection;
 using Wolverine.Attributes;
 using Wolverine.Configuration;
-using Wolverine.Transports;
 using Wolverine.Transports.Sending;
 
 namespace Wolverine.Runtime.Routing;
@@ -32,8 +31,9 @@ public abstract class MessageRouterBase : IMessageRouter
     {
         MessageType = messageType ?? throw new ArgumentNullException(nameof(messageType));
 
-        // We'll use this for executing scheduled envelopes that aren't native
-        LocalDurableQueue = runtime.Endpoints.GetOrBuildSendingAgent(TransportConstants.DurableLocalUri);
+        // We'll use this for executing scheduled envelopes that aren't native. Lazy so that building a router
+        // never needs the local transport, which Serverless mode removes.
+        LocalDurableQueue = new LazyLocalDurableSendingAgent(runtime);
 
         var chain = runtime.Handlers.ChainFor(messageType);
         if (chain != null)

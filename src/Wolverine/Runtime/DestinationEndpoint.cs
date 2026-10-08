@@ -2,8 +2,8 @@ using System.Diagnostics;
 using JasperFx.Core;
 using Wolverine.Configuration;
 using Wolverine.Runtime.RemoteInvocation;
+using Wolverine.Runtime.Routing;
 using Wolverine.Runtime.Scheduled;
-using Wolverine.Transports;
 using Wolverine.Transports.Sending;
 
 namespace Wolverine.Runtime;
@@ -54,8 +54,7 @@ internal class DestinationEndpoint : IDestinationEndpoint
         var utcNow = DateTimeOffset.UtcNow;
         if (envelope.IsScheduledForLater(utcNow) && !_endpoint.Agent!.SupportsNativeScheduledSendFor(envelope, utcNow))
         {
-            var localDurableQueue =
-                _parent.Runtime.Endpoints.GetOrBuildSendingAgent(TransportConstants.DurableLocalUri);
+            var localDurableQueue = ScheduledSendFallback.LocalDurableQueueFor(_parent.Runtime, envelope);
             envelope = envelope.ForScheduledSend(localDurableQueue);
         }
 
@@ -100,8 +99,7 @@ internal class DestinationEndpoint : IDestinationEndpoint
         var utcNow = DateTimeOffset.UtcNow;
         if (envelope.IsScheduledForLater(utcNow) && !_endpoint.Agent!.SupportsNativeScheduledSendFor(envelope, utcNow))
         {
-            var localDurableQueue =
-                _parent.Runtime.Endpoints.GetOrBuildSendingAgent(TransportConstants.DurableLocalUri);
+            var localDurableQueue = ScheduledSendFallback.LocalDurableQueueFor(_parent.Runtime, envelope);
             envelope = envelope.ForScheduledSend(localDurableQueue);
         }
 

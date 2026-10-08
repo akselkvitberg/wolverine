@@ -243,7 +243,12 @@ public class MessageRoute : IMessageRoute, IMessageInvoker
             else if (!sender.SupportsNativeScheduledSendFor(envelope, utcNow))
             {
                 runtime.Logger.LogDebug("Envelope {EnvelopeId} ({MessageType}) wrapped for durable scheduled send to {Destination} (transport does not support native scheduling for this envelope)", envelope.Id, envelope.MessageType, envelope.Destination);
-                return envelope.ForScheduledSend(localDurableQueue);
+                // Resolve now, in the caller, so a Serverless host gets its error from the publish call instead of
+                // from the flush's catch block, which would log and discard it
+                var holder = localDurableQueue is LazyLocalDurableSendingAgent lazy
+                    ? lazy.Resolve(envelope)
+                    : localDurableQueue;
+                return envelope.ForScheduledSend(holder);
             }
             else
             {

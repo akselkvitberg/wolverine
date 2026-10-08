@@ -321,27 +321,20 @@ public partial class WolverineRuntime
             // before RuntimeIsFullyStarted observers run. AOT pillar follow-up
             // #2769 (Option A).
             //
-            // Skip in MediatorOnly and Serverless modes:
-            //   - MediatorOnly: no messaging happens through this runtime, so
-            //     RoutingFor() is never called in steady state. Pre-populating
-            //     would lazily instantiate local sending agents (the
-            //     LocalRoutingMessageSource resolves Endpoint.Agent as a side
-            //     effect of building a route), violating the mode's "no
-            //     transports" contract.
-            //   - Serverless: RemoveLocal() above stripped the local transport,
-            //     but MessageRouterBase's ctor unconditionally calls
-            //     GetOrBuildSendingAgent(TransportConstants.DurableLocalUri)
-            //     for scheduled-envelope fallback, which now throws
-            //     UnknownTransportException. Skipping the pre-population avoids
-            //     materializing routers we don't need in this mode; per-type
-            //     RoutingFor() on the cold path still works because callers
-            //     either target external endpoints directly or never invoke
-            //     routing for local-only types.
+            // Skip in MediatorOnly mode: no messaging happens through this runtime, so RoutingFor() is never
+            // called in steady state, and pre-populating would lazily instantiate local sending agents (the
+            // LocalRoutingMessageSource resolves Endpoint.Agent as a side effect of building a route).
             //
-            // TODO: a follow-up could make MessageRouterBase's LocalDurableQueue
-            // lazy / nullable so Serverless apps reclaim the AOT cold-start win.
+            // Serverless pre-populates too. Router construction no longer touches local://durable
+            // (LazyLocalDurableSendingAgent), so the cold-start win applies there as well. Agent commands are
+            // left out there: they route only to the local "agents" queue, which Serverless removes along with
+            // the rest of the local transport, and Serverless runs no agents.
             var mode = Options.Durability.Mode;
-            if (mode != DurabilityMode.MediatorOnly && mode != DurabilityMode.Serverless)
+            if (mode == DurabilityMode.Serverless)
+            {
+                PrepopulateRoutingCache(Handlers.AllMessageTypes().Where(x => !x.CanBeCastTo<IAgentCommand>()));
+            }
+            else if (mode != DurabilityMode.MediatorOnly)
             {
                 PrepopulateRoutingCache(Handlers.AllMessageTypes());
             }
