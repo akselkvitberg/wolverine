@@ -142,6 +142,9 @@ public class HandlerPipeline : IHandlerPipeline
     {
         try
         {
+            // Tell a channel that settles from the whole run (Pub/Sub push) that this ack is a failure
+            (channel as IObserveChannelFailures)?.ProcessingFailed(envelope, exception);
+
             // Gotta get the message out of here because it's something that
             // could never be handled
             await channel.CompleteAsync(envelope).ConfigureAwait(false);

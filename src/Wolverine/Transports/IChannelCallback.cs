@@ -136,3 +136,22 @@ public interface ISupportLeaseRenewal
     /// </remarks>
     ValueTask<IReadOnlyList<Envelope>> RenewLeasesAsync(IReadOnlyList<Envelope> envelopes, CancellationToken token);
 }
+
+/// <summary>
+/// Optional capability of a channel that settles a delivery from the outcome of the whole pipeline run, such as
+/// Pub/Sub push delivery answering one HTTP request. Wolverine tells the channel about failures that it would
+/// otherwise only log, so the channel can refuse to acknowledge the incoming message.
+/// </summary>
+public interface IObserveChannelFailures
+{
+    /// <summary>
+    /// An outgoing (cascaded or published) message could not be sent and is about to be discarded
+    /// </summary>
+    void OutgoingSendFailed(Envelope incoming, Envelope outgoing, Exception exception);
+
+    /// <summary>
+    /// The handler pipeline failed in a way it can only recover from by completing the envelope; called before
+    /// <see cref="IChannelCallback.CompleteAsync" />
+    /// </summary>
+    void ProcessingFailed(Envelope envelope, Exception exception);
+}

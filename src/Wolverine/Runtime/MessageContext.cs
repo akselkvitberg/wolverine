@@ -258,6 +258,11 @@ public class MessageContext : MessageBus, IMessageContext, IHasTenantId, IEnvelo
                     "Unable to send outgoing message {Envelope}, so it has been discarded. This is usually either a serialization failure or an unreachable message store",
                     envelope);
                 Runtime.MessageTracking.DiscardedEnvelope(envelope);
+
+                if (_channel is IObserveChannelFailures observer && Envelope != null)
+                {
+                    observer.OutgoingSendFailed(Envelope, envelope, e);
+                }
             }
         }
 
