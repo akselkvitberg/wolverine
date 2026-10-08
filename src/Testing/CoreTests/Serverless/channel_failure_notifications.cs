@@ -68,9 +68,42 @@ public class channel_failure_notifications
         await context.FlushOutgoingMessagesAsync();
     }
 
+    [Fact]
+    public async Task a_throwing_channel_observer_does_not_stop_the_remaining_outgoing_sends()
+    {
+        using var host = await Host.CreateDefaultBuilder()
+            .UseWolverine(opts => opts.Discovery.DisableConventionalDiscovery())
+            .StartAsync(TestContext.Current.CancellationToken);
+        var runtime = host.Services.GetRequiredService<IWolverineRuntime>();
+
+        var channel = new RecordingChannel { ThrowOnOutgoingSendFailed = true };
+        var context = new MessageContext(runtime);
+        context.ReadEnvelope(new Envelope { Id = Guid.NewGuid(), Message = new object() }, channel);
+        await context.EnlistInOutboxAsync(context);
+
+        var first = Substitute.For<ISendingAgent>();
+        first.IsDurable.Returns(false);
+        first.StoreAndForwardAsync(Arg.Any<Envelope>())
+            .Returns(_ => ValueTask.FromException(new DivideByZeroException()));
+
+        var second = Substitute.For<ISendingAgent>();
+        second.IsDurable.Returns(false);
+        second.StoreAndForwardAsync(Arg.Any<Envelope>())
+            .Returns(_ => ValueTask.FromException(new DivideByZeroException()));
+
+        await context.PersistOrSendAsync(new Envelope { Message = new object(), Sender = first });
+        await context.PersistOrSendAsync(new Envelope { Message = new object(), Sender = second });
+
+        await context.FlushOutgoingMessagesAsync();
+
+        await first.Received(1).StoreAndForwardAsync(Arg.Any<Envelope>());
+        await second.Received(1).StoreAndForwardAsync(Arg.Any<Envelope>());
+    }
+
     private class RecordingChannel : IChannelCallback, IObserveChannelFailures
     {
         public List<string> Calls { get; } = new();
+        public bool ThrowOnOutgoingSendFailed { get; init; }
         public IHandlerPipeline? Pipeline => null;
 
         public ValueTask CompleteAsync(Envelope envelope)
@@ -86,7 +119,10 @@ public class channel_failure_notifications
         }
 
         public void OutgoingSendFailed(Envelope incoming, Envelope outgoing, Exception exception)
-            => Calls.Add("OutgoingSendFailed");
+        {
+            Calls.Add("OutgoingSendFailed");
+            if (ThrowOnOutgoingSendFailed) throw new InvalidOperationException("observer failed");
+        }
 
         public void ProcessingFailed(Envelope envelope, Exception exception) => Calls.Add("ProcessingFailed");
     }

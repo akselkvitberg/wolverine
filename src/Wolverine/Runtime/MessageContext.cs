@@ -261,7 +261,17 @@ public class MessageContext : MessageBus, IMessageContext, IHasTenantId, IEnvelo
 
                 if (_channel is IObserveChannelFailures observer && Envelope != null)
                 {
-                    observer.OutgoingSendFailed(Envelope, envelope, e);
+                    try
+                    {
+                        observer.OutgoingSendFailed(Envelope, envelope, e);
+                    }
+                    catch (Exception observerFailure)
+                    {
+                        // A misbehaving observer must not abort the loop and strand the remaining envelopes
+                        Runtime.Logger.LogWarning(observerFailure,
+                            "The channel failed while being told that outgoing message {Envelope} could not be sent",
+                            envelope);
+                    }
                 }
             }
         }
